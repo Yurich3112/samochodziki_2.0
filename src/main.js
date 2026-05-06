@@ -16,9 +16,12 @@ const view = {
   showSensors: true,
 };
 
-let dirty = true;
-const requestRedraw = () => { dirty = true; };
 let mode = 'editor';
+let dirty = true;
+const requestRedraw = () => {
+  dirty = true;
+  updateEditorUiState();
+};
 let lastT = performance.now();
 let lastHudT = 0;
 const timeScales = [1, 2, 4, 8];
@@ -45,15 +48,32 @@ function setMode(nextMode) {
     simulation.stop();
     editor.enabled = true;
   }
+  updateEditorUiState();
   requestRedraw();
 }
 
 document.querySelectorAll('.tool-btn').forEach(btn => {
   btn.addEventListener('click', () => {
+    if (btn.disabled) return;
     document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     editor.setTool(btn.dataset.tool);
   });
+});
+
+document.getElementById('random-track').addEventListener('click', () => {
+  if (mode === 'simulate' || track.strokes.length > 0) return;
+
+  simulation.stop();
+  editor.resetCommit();
+  const stroke = track.addStroke(generateRandomTrackPoints(), editor.brushSize);
+  editor.strokeCommitted = Boolean(stroke);
+  document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+  const drawBtn = document.querySelector('.tool-btn[data-tool="draw"]');
+  drawBtn?.classList.add('active');
+  editor.setTool('draw');
+  updateEditorUiState();
+  requestRedraw();
 });
 
 const brushSlider = document.getElementById('brush-size');
@@ -78,6 +98,7 @@ document.getElementById('clear-track').addEventListener('click', () => {
   track.clear();
   editor.resetCommit();
   setMode('editor');
+  updateEditorUiState();
   requestRedraw();
 });
 
@@ -129,10 +150,12 @@ function frame(t) {
 window.addEventListener('resize', requestRedraw);
 requestAnimationFrame(frame);
 updateFastForwardButton();
+updateEditorUiState();
 
 function updateHud(t = performance.now()) {
   if (t - lastHudT < 120) return;
   lastHudT = t;
+  updateEditorUiState();
   const stats = simulation.getStats();
   text('generation-count', stats.generation);
   text('best-distance', Math.round(stats.bestDistance));
@@ -146,6 +169,65 @@ function updateHud(t = performance.now()) {
   updateLeaderboard();
   drawNetwork();
   drawHistory(stats);
+}
+
+function updateEditorUiState() {
+  const hasTrack = track.strokes.length > 0;
+  const simMode = mode === 'simulate';
+  const hintBar = document.querySelector('.hint-bar');
+  if (hintBar) {
+    hintBar.hidden = simMode || hasTrack;
+  }
+
+  document.querySelectorAll('.tool-btn').forEach(btn => {
+    btn.disabled = simMode;
+  });
+
+  const randomTrackBtn = document.getElementById('random-track');
+  if (randomTrackBtn) {
+    randomTrackBtn.disabled = simMode || hasTrack;
+  }
+}
+
+function generateRandomTrackPoints() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const margin = Math.max(130, editor.brushSize * 1.7);
+  const cx = w / 2 + randomBetween(-w * 0.06, w * 0.06);
+  const cy = h / 2 + randomBetween(-h * 0.05, h * 0.05);
+  const maxRx = Math.max(170, w / 2 - margin);
+  const maxRy = Math.max(140, h / 2 - margin);
+  const base = Math.min(maxRx, maxRy);
+  const rx = Math.min(maxRx, base * randomBetween(1.05, 1.45));
+  const ry = Math.min(maxRy, base * randomBetween(0.72, 1.05));
+  const rotation = randomBetween(-0.45, 0.45);
+  const wobbleA = Math.random() * Math.PI * 2;
+  const wobbleB = Math.random() * Math.PI * 2;
+  const count = 15 + Math.floor(Math.random() * 5);
+  const points = [];
+
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    const r = 1
+      + Math.sin(a * 2 + wobbleA) * 0.14
+      + Math.sin(a * 3 + wobbleB) * 0.08
+      + randomBetween(-0.045, 0.045);
+    const localX = Math.cos(a) * rx * r;
+    const localY = Math.sin(a) * ry * r;
+    const x = cx + localX * Math.cos(rotation) - localY * Math.sin(rotation);
+    const y = cy + localX * Math.sin(rotation) + localY * Math.cos(rotation);
+    points.push({
+      x: Math.max(margin, Math.min(w - margin, x)),
+      y: Math.max(margin, Math.min(h - margin, y)),
+    });
+  }
+
+  points.push({ ...points[0] });
+  return points;
+}
+
+function randomBetween(min, max) {
+  return min + Math.random() * (max - min);
 }
 
 function updateFastForwardButton() {

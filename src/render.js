@@ -19,6 +19,14 @@ const CENTER_DASH = [22, 24];
 const ASPHALT_TOP = '#3d424b';
 const ASPHALT_BOT = '#2c3038';
 const WALL_DARK = '#0b0d11';
+const ROCK_SHAPES = [
+  [[-0.62, -0.18], [-0.32, -0.56], [0.28, -0.52], [0.58, -0.14], [0.46, 0.34], [0.02, 0.54], [-0.48, 0.32]],
+  [[-0.52, -0.34], [-0.08, -0.58], [0.46, -0.42], [0.62, 0.04], [0.26, 0.48], [-0.28, 0.44], [-0.62, 0.02]],
+  [[-0.68, -0.04], [-0.38, -0.42], [0.1, -0.58], [0.54, -0.3], [0.64, 0.16], [0.18, 0.52], [-0.42, 0.42]],
+  [[-0.46, -0.48], [0.18, -0.6], [0.62, -0.22], [0.5, 0.28], [0.08, 0.58], [-0.52, 0.3], [-0.68, -0.12]],
+  [[-0.6, -0.26], [-0.16, -0.54], [0.36, -0.48], [0.68, -0.02], [0.34, 0.46], [-0.18, 0.56], [-0.58, 0.18]],
+];
+
 export class TrackRenderer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -65,11 +73,16 @@ export class TrackRenderer {
     // --- ground layer (0) ---
     for (const s of track.strokes) drawStroke(ctx, s, view);
 
-    // --- props (pre-sorted by Y in track.generateProps for correct depth overlap) ---
+    // --- props (pre-sorted by layer/Y in track.generateProps for correct overlap) ---
     // Draw before bridge overlays so elevated road decks cover tyre stacks.
     if (track.props) {
       const baseSizes = { tree_1: 120, tree_2: 120, tyre_stack_1: 120, rocks: 100 };
       for (const p of track.props) {
+        if (p.type === 'rocks') {
+          drawRockProp(ctx, p);
+          continue;
+        }
+
         const img = this.loadedProps[p.type];
         if (img && img.complete && img.naturalWidth > 0) {
           const base = baseSizes[p.type] ?? 120;
@@ -102,17 +115,17 @@ export class TrackRenderer {
     }
 
     // --- in-progress stroke preview ---
-    if (editor.drawing && editor.currentPoints.length >= 2) {
+    if (editor.enabled && editor.drawing && editor.currentPoints.length >= 2) {
       drawDrawingPreview(ctx, editor.currentPoints, editor.brushSize);
     }
 
     // --- eraser hover highlight ---
-    if (editor.tool === 'eraser' && editor.hoveredStroke) {
+    if (editor.enabled && editor.tool === 'eraser' && editor.hoveredStroke) {
       drawEraseHighlight(ctx, editor.hoveredStroke);
     }
 
     // --- cursor preview ---
-    if (editor.cursor && !editor.drawing) {
+    if (editor.enabled && editor.cursor && !editor.drawing) {
       if (editor.strokeCommitted && editor.tool !== 'eraser') {
         // Show a "locked" cursor to signal one-stroke limit.
         drawCursorLocked(ctx, editor.cursor, editor.brushSize);
@@ -126,6 +139,71 @@ export class TrackRenderer {
       drawStrokeLockedHint(ctx, w, h);
     }
   }
+}
+
+function drawRockProp(ctx, p) {
+  const shape = ROCK_SHAPES[(p.variant ?? 0) % ROCK_SHAPES.length];
+  const shade = p.shade ?? 0.5;
+  const size = 32 * (p.scale ?? 1);
+  const center = {
+    x: -0.04 + (shade - 0.5) * 0.08,
+    y: -0.02 + (((p.variant ?? 0) % 3) - 1) * 0.035,
+  };
+  const palette = {
+    light: shade < 0.33 ? '#b3b7b5' : shade < 0.66 ? '#a8adaf' : '#9da4a7',
+    mid: shade < 0.33 ? '#8c918e' : shade < 0.66 ? '#82898b' : '#788083',
+    dark: shade < 0.33 ? '#626965' : shade < 0.66 ? '#596166' : '#515a5e',
+    deepest: '#3f474b',
+  };
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(p.rotation ?? 0);
+  ctx.scale(size, size * (0.82 + ((p.variant ?? 0) % 2) * 0.08));
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+  ctx.beginPath();
+  ctx.ellipse(0.08, 0.18, 0.56, 0.32, 0.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (let i = 0; i < shape.length; i++) {
+    const a = shape[i];
+    const b = shape[(i + 1) % shape.length];
+    const side = (a[0] + b[0]) * 0.5;
+    const depth = (a[1] + b[1]) * 0.5;
+    ctx.fillStyle = depth < -0.22
+      ? palette.light
+      : side < -0.1
+        ? palette.mid
+        : depth > 0.24
+          ? palette.deepest
+          : palette.dark;
+    ctx.beginPath();
+    ctx.moveTo(center.x, center.y);
+    ctx.lineTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.lineWidth = 0.09;
+  ctx.strokeStyle = '#151719';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(shape[0][0], shape[0][1]);
+  for (let i = 1; i < shape.length; i++) ctx.lineTo(shape[i][0], shape[i][1]);
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.lineWidth = 0.045;
+  ctx.strokeStyle = 'rgba(20, 22, 24, 0.45)';
+  ctx.beginPath();
+  ctx.moveTo(center.x, center.y);
+  const crack = shape[(p.variant ?? 0) % shape.length];
+  ctx.lineTo(crack[0] * 0.55, crack[1] * 0.55);
+  ctx.stroke();
+
+  ctx.restore();
 }
 
 function drawStroke(ctx, s, view) {

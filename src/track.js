@@ -191,7 +191,7 @@ export class Track {
     this.props = [];
     if (this.strokes.length === 0) return;
     
-    // 1. Scatter environment props (trees, rocks)
+    // 1. Scatter environment props.
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const s of this.strokes) {
       for (const p of s.center) {
@@ -206,27 +206,62 @@ export class Track {
     minX -= 500; minY -= 500; maxX += 500; maxY += 500;
     
     const area = (maxX - minX) * (maxY - minY);
-    const numEnvProps = Math.floor(area / 30000); // density: 1 prop per ~170x170 pixels
-    
-    for (let i = 0; i < numEnvProps; i++) {
-      const x = minX + Math.random() * (maxX - minX);
-      const y = minY + Math.random() * (maxY - minY);
-      
-      let tooClose = false;
-      for (const s of this.strokes) {
-        for (const p of s.center) {
-          if (Math.hypot(p.x - x, p.y - y) < s.width * 0.9 + 50) {
-            tooClose = true;
-            break;
-          }
-        }
-        if (tooClose) break;
+    const numTrees = Math.floor(area / 36000);
+    const numRockClusters = Math.floor(area / 140000);
+    const numLoneRocks = Math.floor(area / 90000);
+    const bounds = { minX, minY, maxX, maxY };
+
+    for (let i = 0; i < numTrees; i++) {
+      const spot = findPropSpot(this.strokes, bounds, 90, 14);
+      if (!spot) continue;
+      const type = Math.random() < 0.5 ? 'tree_1' : 'tree_2';
+      this.props.push({ type, x: spot.x, y: spot.y, scale: 0.8 + Math.random() * 0.4 });
+    }
+
+    for (let i = 0; i < numRockClusters; i++) {
+      const center = findPropSpot(this.strokes, bounds, 120, 18);
+      if (!center) continue;
+
+      const count = 3 + Math.floor(Math.random() * 6);
+      const radiusX = 28 + Math.random() * 62;
+      const radiusY = 18 + Math.random() * 48;
+      const clusterAngle = Math.random() * Math.PI * 2;
+
+      for (let j = 0; j < count; j++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.sqrt(Math.random());
+        const lx = Math.cos(a) * radiusX * d;
+        const ly = Math.sin(a) * radiusY * d;
+        const ca = Math.cos(clusterAngle);
+        const sa = Math.sin(clusterAngle);
+        const x = center.x + lx * ca - ly * sa;
+        const y = center.y + lx * sa + ly * ca;
+        if (!isPropSpotClear(this.strokes, x, y, 45)) continue;
+
+        this.props.push({
+          type: 'rocks',
+          x,
+          y,
+          scale: 0.55 + Math.random() * 0.65,
+          rotation: Math.random() * Math.PI * 2,
+          variant: Math.floor(Math.random() * 5),
+          shade: Math.random(),
+        });
       }
-      
-      if (!tooClose) {
-        const type = Math.random() < 0.15 ? 'rocks' : (Math.random() < 0.5 ? 'tree_1' : 'tree_2');
-        this.props.push({ type, x, y, scale: 0.8 + Math.random() * 0.4 });
-      }
+    }
+
+    for (let i = 0; i < numLoneRocks; i++) {
+      const spot = findPropSpot(this.strokes, bounds, 70, 12);
+      if (!spot) continue;
+      this.props.push({
+        type: 'rocks',
+        x: spot.x,
+        y: spot.y,
+        scale: 0.45 + Math.random() * 0.5,
+        rotation: Math.random() * Math.PI * 2,
+        variant: Math.floor(Math.random() * 5),
+        shade: Math.random(),
+      });
     }
     
     // 2. Tyre barriers on curved corners (outside of turns only)
@@ -282,9 +317,34 @@ export class Track {
       }
     }
 
-    // 3. Sort all props by Y so closer-to-viewer (higher Y) is drawn last (on top)
-    this.props.sort((a, b) => a.y - b.y);
+    // 3. Sort by visual layer first, then Y. Trees intentionally render above rocks.
+    this.props.sort((a, b) => propLayer(a.type) - propLayer(b.type) || a.y - b.y);
   }
+}
+
+function findPropSpot(strokes, bounds, clearance, attempts) {
+  for (let i = 0; i < attempts; i++) {
+    const x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
+    const y = bounds.minY + Math.random() * (bounds.maxY - bounds.minY);
+    if (isPropSpotClear(strokes, x, y, clearance)) return { x, y };
+  }
+  return null;
+}
+
+function isPropSpotClear(strokes, x, y, clearance) {
+  for (const s of strokes) {
+    const minDist = s.width * 0.9 + clearance;
+    for (let i = 1; i < s.center.length; i++) {
+      if (pointToSegmentDist(x, y, s.center[i - 1], s.center[i]) < minDist) return false;
+    }
+  }
+  return true;
+}
+
+function propLayer(type) {
+  if (type === 'rocks') return 0;
+  if (type === 'tyre_stack_1') return 1;
+  return 2;
 }
 
 // ─── Path optimisation helpers ───────────────────────────────────────
