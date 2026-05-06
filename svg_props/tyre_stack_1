@@ -1,0 +1,39 @@
+<!-- ... existing code ... -->
+  <div class="asset-container">
+    <!-- SVG Tyre Stack Asset -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="100%" height="100%">
+      
+      <defs>
+        <!-- Single Tyre Definition -->
+        <g id="tyre-single">
+          <!-- Side wall background -->
+          <path d="M -24 0 A 24 24 0 0 0 24 0 L 24 -11 A 24 24 0 0 1 -24 -11 Z" fill="#3d4043" stroke="#111213" stroke-width="3" stroke-linejoin="round"/>
+          
+          <!-- Top face -->
+          <circle cx="0" cy="-11" r="24" fill="#535659" stroke="#111213" stroke-width="3"/>
+          
+          <!-- Top highlight/tread ridge (subtle ring) -->
+          <circle cx="0" cy="-11" r="16" fill="none" stroke="#44474a" stroke-width="2"/>
+          
+          <!-- Inner hole base -->
+          <circle cx="0" cy="-11" r="11" fill="#26282a" stroke="#111213" stroke-width="3"/>
+          
+          <!-- Inner hole depth shadow (creates 3D cavity effect) -->
+          <path d="M -11 -11 A 11 11 0 0 1 11 -11 A 11 6 0 0 0 -11 -11 Z" fill="#181a1b"/>
+        </g>
+      </defs>
+
+      <!-- Drop Shadow -->
+      <circle cx="64" cy="85" r="24" fill="rgba(0,0,0,0.35)"/>
+
+      <!-- Stack of 4 Tyres (Bottom to Top) -->
+      <use href="#tyre-single" transform="translate(60, 82)"/>
+      <use href="#tyre-single" transform="translate(60, 71)"/>
+      <use href="#tyre-single" transform="translate(60, 60)"/>
+      <use href="#tyre-single" transform="translate(60, 49)"/>
+
+    </svg>
+  </div>
+
+</body>
+</html>

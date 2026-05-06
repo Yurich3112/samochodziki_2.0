@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tree Asset Preview</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      /* Background color matched to the game's grass */
+      background-color: #2b3e2e; 
+    }
+    .tree-container {
+      width: 250px;
+      height: 250px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="tree-container">
+    <!-- SVG Tree Asset -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="100%" height="100%">
+      
+      <defs>
+        <g id="canopy-shape">
+          <circle cx="60" cy="60" r="28"/>
+          <circle cx="60" cy="35" r="22"/>
+          <circle cx="82" cy="46" r="20"/>
+          <circle cx="86" cy="68" r="18"/>
+          <circle cx="72" cy="88" r="19"/>
+          <circle cx="48" cy="88" r="21"/>
+          <circle cx="32" cy="72" r="18"/>
+          <circle cx="34" cy="48" r="20"/>
+        </g>
+      </defs>
+
+      <!-- Drop Shadow -->
+      <use href="#canopy-shape" fill="rgba(0,0,0,0.35)" transform="translate(6, 8)"/>
+
+      <!-- Base Canopy (Dark) -->
+      <use href="#canopy-shape" fill="#1b3b22"/>
+
+      <!-- Inner Branches / Shadow Depths -->
+      <circle cx="60" cy="60" r="8" fill="#112415"/>
+
+      <!-- Mid-level foliage -->
+      <g fill="#26522f">
+        <circle cx="60" cy="60" r="23"/>
+        <circle cx="58" cy="33" r="17"/>
+        <circle cx="78" cy="44" r="15"/>
+        <circle cx="82" cy="65" r="13"/>
+        <circle cx="68" cy="84" r="14"/>
+        <circle cx="46" cy="84" r="16"/>
+        <circle cx="30" cy="69" r="13"/>
+        <circle cx="32" cy="46" r="15"/>
+        <circle cx="45" cy="32" r="12"/>
+        <circle cx="70" cy="75" r="12"/>
+      </g>
+
+      <!-- Highlights (light source from top-left) -->
+      <g fill="#357040">
+        <circle cx="56" cy="28" r="10"/>
+        <circle cx="74" cy="38" r="9"/>
+        <circle cx="78" cy="58" r="8"/>
+        <circle cx="62" cy="78" r="9"/>
+        <circle cx="40" cy="78" r="9"/>
+        <circle cx="26" cy="64" r="8"/>
+        <circle cx="27" cy="40" r="9"/>
+        <circle cx="52" cy="52" r="13"/>
+        <circle cx="44" cy="38" r="8"/>
+      </g>
+
+      <!-- Small leaf highlights/texture -->
+      <g fill="#438c50">
+        <circle cx="54" cy="24" r="4"/>
+        <circle cx="71" cy="34" r="3"/>
+        <circle cx="50" cy="49" r="5"/>
+        <circle cx="24" cy="38" r="3"/>
+        <circle cx="38" cy="75" r="4"/>
+        <circle cx="60" cy="74" r="3"/>
+        <circle cx="42" cy="36" r="2"/>
+      </g>
+
+    </svg>
+  </div>
+
+</body>
+</html>

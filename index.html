@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>SAMOchodziki 2.0 — Neuroevolution Racing Simulator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="panel panel-left">
+      <header class="brand">
+        <div class="brand-mark">SC</div>
+        <div class="brand-text">
+          <div class="brand-title"><span class="brand-accent">SAMO</span>chodziki <span class="brand-version">2.0</span></div>
+          <div class="brand-sub">Neuroevolution Racing Simulator</div>
+        </div>
+      </header>
+
+      <nav class="mode-tabs">
+        <button class="tab active" data-mode="editor">
+          <span class="tab-icon">✎</span>
+          <span>Track editor</span>
+        </button>
+        <button class="tab" data-mode="simulate">
+          <span class="tab-icon">▶</span>
+          <span>Simulate</span>
+        </button>
+      </nav>
+
+      <section class="section">
+        <h3 class="section-title">Tools</h3>
+        <div class="tool-stack">
+          <button class="tool-btn active" data-tool="draw">
+            <span class="tool-icon">✎</span>
+            <span>Draw</span>
+          </button>
+          <button class="tool-btn" data-tool="eraser">
+            <span class="tool-icon">⌫</span>
+            <span>Eraser</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="section">
+        <h3 class="section-title">Brush size</h3>
+        <div class="slider-row">
+          <input id="brush-size" type="range" min="50" max="160" value="90" step="2" />
+          <span class="slider-value"><span id="brush-size-value">90</span> px</span>
+        </div>
+      </section>
+
+      <section class="section">
+        <h3 class="section-title">View</h3>
+        <label class="check"><input type="checkbox" id="show-track" checked /><span>Show track</span></label>
+        <label class="check"><input type="checkbox" id="show-walls" checked /><span>Show walls</span></label>
+        <label class="check"><input type="checkbox" id="show-centerline" checked /><span>Show centerline</span></label>
+        <label class="check"><input type="checkbox" id="show-sensors" checked /><span>Show sensors (sim)</span></label>
+      </section>
+
+      <section class="section sim-stats">
+        <h3 class="section-title">Generation</h3>
+        <div class="big-number" id="generation-count">1</div>
+        <div class="metric-label">Progress to next generation</div>
+        <div class="progress"><div id="generation-progress" style="width:0%"></div></div>
+        <div class="metric-row">
+          <span>Best distance</span>
+          <strong><span id="best-distance">0</span> m</strong>
+        </div>
+      </section>
+
+      <section class="section spacer"></section>
+
+      <section class="section actions">
+        <button class="btn btn-primary" id="start-pause">
+          <span class="btn-icon">▶</span>
+          <span>Start / pause</span>
+        </button>
+        <button class="btn" id="fast-forward">
+          <span class="btn-icon">⏩</span>
+          <span>Fast forward 1x</span>
+        </button>
+        <button class="btn" id="next-generation">
+          <span class="btn-icon">»</span>
+          <span>Next generation</span>
+        </button>
+        <button class="btn btn-danger" id="reset-simulation">
+          <span class="btn-icon">↻</span>
+          <span>Reset simulation</span>
+        </button>
+        <button class="btn btn-danger" id="clear-track">
+          <span class="btn-icon">🗑</span>
+          <span>Clear track</span>
+        </button>
+      </section>
+    </aside>
+
+    <main class="stage">
+      <div class="hint-bar">
+        <div class="hint">
+          <span class="hint-label">Draw the track</span>
+          <span class="hint-detail">Left mouse: draw</span>
+        </div>
+        <div class="hint">
+          <span class="hint-label">Erase track</span>
+          <span class="hint-detail">Right mouse / eraser: remove a stroke</span>
+        </div>
+      </div>
+      <canvas id="stage-canvas"></canvas>
+    </main>
+
+    <aside class="panel panel-right">
+      <header class="panel-header">Telemetry</header>
+      <section class="telemetry-card">
+        <h3 class="section-title">Neural network (leader)</h3>
+        <canvas id="network-canvas" width="240" height="180"></canvas>
+      </section>
+      <section class="telemetry-card">
+        <h3 class="section-title">Simulation status</h3>
+        <div class="metric-row"><span>Status</span><strong id="sim-status">IDLE</strong></div>
+        <div class="metric-row"><span>Active cars</span><strong><span id="active-cars">0</span> / <span id="total-cars">0</span></strong></div>
+        <div class="metric-row"><span>Generation time</span><strong id="generation-time">00:00</strong></div>
+        <div class="metric-row"><span>Time scale</span><strong id="time-scale">1.0x</strong></div>
+      </section>
+      <section class="telemetry-card">
+        <h3 class="section-title">Distance leaderboard</h3>
+        <ol class="leaderboard" id="leaderboard"></ol>
+      </section>
+      <section class="telemetry-card">
+        <h3 class="section-title">Best distance over generations</h3>
+        <canvas id="history-canvas" width="240" height="150"></canvas>
+      </section>
+      <div class="placeholder">
+        <p class="placeholder-step">Draw a closed track, then switch to Simulate.</p>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
