@@ -26,7 +26,7 @@ const requestRedraw = () => {
 };
 let lastT = performance.now();
 let lastHudT = 0;
-const timeScales = [1, 2, 4, 8];
+const timeScales = [1, 2, 4, 8, 16];
 let timeScaleIndex = 0;
 let selectedCarIndex = 0;
 
@@ -135,8 +135,12 @@ function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000);
   lastT = t;
   if (simulation.running) {
-    for (let i = 0; i < simulation.timeScale; i++) {
-      simulation.update(dt);
+    const scale = simulation.timeScale;
+    for (let i = 0; i < scale; i++) {
+      const isLastTick = i === scale - 1;
+      simulation.update(dt, isLastTick);
+      // Early exit if generation ended mid-batch (all agents dead / advanced).
+      if (!simulation.running) break;
     }
     dirty = true;
   }

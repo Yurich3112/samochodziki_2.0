@@ -113,9 +113,17 @@ export class Track {
     const selfOverlaps = findSelfOverlaps(finalCenter, lengths, closed, width);
     for (const ov of selfOverlaps) {
       // If an existing self-crossing bridge covers this zone, upgrade it with our measured overlap span.
+      // Check against both upper (b.s) and lower (b.lowerS) arc-lengths — the overlap may be
+      // detected on either side of the crossing point.
       let isDup = false;
+      const dupRadius = width * 3.5;
       for (const b of stroke.bridgesOver) {
-        if (b.self && Math.abs(b.s - ov.upperS) < width * 2.0) { 
+        if (!b.self) continue;
+        const nearUpper = Math.abs(b.s - ov.upperS) < dupRadius;
+        const nearLower = b.lowerS != null && Math.abs(b.lowerS - ov.upperS) < dupRadius;
+        const nearUpperToLower = Math.abs(b.s - ov.lowerS) < dupRadius;
+        const nearLowerToLower = b.lowerS != null && Math.abs(b.lowerS - ov.lowerS) < dupRadius;
+        if (nearUpper || nearLower || nearUpperToLower || nearLowerToLower) {
           isDup = true; 
           if (!b.overlapSpan || ov.overlapSpan > b.overlapSpan) {
             b.overlapSpan = ov.overlapSpan;

@@ -128,6 +128,20 @@ function bridgeSupportLevel(stroke, bridge, levels) {
     if (arcDistance(stroke, bridge.lowerS, other.s) <= lowerSpan + span) {
       level = Math.max(level, levels.get(other) ?? 1);
     }
+
+    // Adjacent upper zones (e.g. figure-8): if two bridges' elevated decks
+    // overlap or are nearly contiguous on the road, one must be raised above
+    // the other so they don't visually merge at the same level.
+    const upperGap = arcDistance(stroke, bridge.s, other.s);
+    const upperOverlapThreshold = bridgeZoneSpan(stroke, bridge) + bridgeZoneSpan(stroke, other) + stroke.width * 0.5;
+    if (upperGap < upperOverlapThreshold) {
+      // The bridge whose upper-s comes later on the road goes on top.
+      // For closed tracks, compare by which direction is "forward".
+      const bridgeIsLater = bridge.s > other.s;
+      if (bridgeIsLater) {
+        level = Math.max(level, levels.get(other) ?? 1);
+      }
+    }
   }
 
   return level;

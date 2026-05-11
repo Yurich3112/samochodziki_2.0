@@ -320,8 +320,17 @@ function drawRallyCar(ctx, car, scale = 0.28) {
   ctx.restore();
 }
 
+// Cache parsed Path2D objects by SVG path string — each car model draws the
+// same ~30 paths every frame for every one of ~30 cars. Without caching that's
+// ~900 Path2D constructions per frame; with caching it's ~30 total ever.
+const _pathCache = new Map();
+
 function path(ctx, d, fill) {
-  const p = new Path2D(d);
+  let p = _pathCache.get(d);
+  if (!p) {
+    p = new Path2D(d);
+    _pathCache.set(d, p);
+  }
   ctx.fillStyle = fill;
   ctx.fill(p);
 }
@@ -354,8 +363,18 @@ function drawBrakeLights(ctx, brake, lights = [
   { x: 61, y: 176, w: 12, h: 5 },
 ]) {
   const isOn = brake > 0.18;
-  const intensity = isOn ? 1 : 0.22;
-  const glow = isOn ? 34 : 0;
+
+  // Brake-off state: dim rectangles, no glow — cheap.
+  if (!isOn) {
+    ctx.fillStyle = 'rgba(150, 25, 25, 0.25)';
+    for (const light of lights) {
+      roundedRect(ctx, light.x, light.y, light.w, light.h, Math.min(2, light.h / 2), ctx.fillStyle);
+    }
+    return;
+  }
+
+  // Brake-on state: bright rectangles + halo glow.
+  // Avoids ctx.shadowBlur which triggers expensive software rasterisation.
   const center = lights.reduce((sum, light) => ({
     x: sum.x + light.x + light.w / 2,
     y: sum.y + light.y + light.h / 2,
@@ -363,35 +382,36 @@ function drawBrakeLights(ctx, brake, lights = [
   center.x /= lights.length;
   center.y /= lights.length;
 
-  ctx.save();
-  ctx.shadowColor = isOn ? 'rgba(255, 22, 22, 1)' : 'rgba(255, 22, 22, 0)';
-  ctx.shadowBlur = glow;
-  ctx.fillStyle = isOn ? `rgba(255, 36, 36, ${intensity})` : 'rgba(150, 25, 25, 0.25)';
+  ctx.fillStyle = 'rgba(255, 36, 36, 1)';
   for (const light of lights) {
     roundedRect(ctx, light.x, light.y, light.w, light.h, Math.min(2, light.h / 2), ctx.fillStyle);
   }
 
-  if (isOn) {
-    const halo = ctx.createRadialGradient(center.x, center.y, 4, center.x, center.y, 38);
-    halo.addColorStop(0, 'rgba(255, 46, 46, 0.45)');
-    halo.addColorStop(1, 'rgba(255, 30, 30, 0)');
-    ctx.fillStyle = halo;
-    ctx.beginPath();
-    ctx.ellipse(center.x, center.y, 42, 18, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
+  const halo = ctx.createRadialGradient(center.x, center.y, 4, center.x, center.y, 38);
+  halo.addColorStop(0, 'rgba(255, 46, 46, 0.45)');
+  halo.addColorStop(1, 'rgba(255, 30, 30, 0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.ellipse(center.x, center.y, 42, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+const _darkenCache = new Map();
+
 function darken(hex, factor) {
+  const key = hex + '|' + factor;
+  let result = _darkenCache.get(key);
+  if (result) return result;
   const clean = hex.replace('#', '');
   const n = parseInt(clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean, 16);
   const r = Math.round(((n >> 16) & 255) * factor);
   const g = Math.round(((n >> 8) & 255) * factor);
   const b = Math.round((n & 255) * factor);
-  return `rgb(${r}, ${g}, ${b})`;
+  result = `rgb(${r}, ${g}, ${b})`;
+  _darkenCache.set(key, result);
+  return result;
 }

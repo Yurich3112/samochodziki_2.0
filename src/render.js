@@ -21,7 +21,7 @@ const ASPHALT_BOT = '#2c3038';
 const WALL_DARK = '#0b0d11';
 const SAND_INNER = 'rgba(178, 151, 94, 0.58)';
 const SAND_OUTER = 'rgba(139, 125, 77, 0.24)';
-const TREE_VARIANT_LIMIT = 32;
+const TREE_VARIANT_LIMIT = 6;
 const ROCK_SHAPES = [
   [[-0.62, -0.18], [-0.32, -0.56], [0.28, -0.52], [0.58, -0.14], [0.46, 0.34], [0.02, 0.54], [-0.48, 0.32]],
   [[-0.52, -0.34], [-0.08, -0.58], [0.46, -0.42], [0.62, 0.04], [0.26, 0.48], [-0.28, 0.44], [-0.62, 0.02]],
@@ -39,6 +39,13 @@ export class TrackRenderer {
     this._resize();
     window.addEventListener('resize', () => this._resize());
     
+    // Off-screen cache for the static track layer (road, props, bridges, gates).
+    // This avoids re-computing hundreds of sampleAt/strokePath calls every frame
+    // when only the cars/skids/sensors are changing.
+    this._trackCache = null;      // OffscreenCanvas or HTMLCanvasElement
+    this._trackCacheStamp = null;  // Track content fingerprint
+    this._trackCacheView = null;   // Serialised view toggles
+
     // Load props
     this.loadedProps = {};
     this.treeProps = [];
@@ -51,10 +58,13 @@ export class TrackRenderer {
       img.src = src;
       this.loadedProps[name] = img;
     }
-    for (let i = 1; i <= TREE_VARIANT_LIMIT; i++) {
+    for (let i = 3; i <= TREE_VARIANT_LIMIT; i++) {
       const img = new Image();
       img.onload = () => {
-        if (!this.treeProps.includes(img)) this.treeProps.push(img);
+        if (!this.treeProps.includes(img)) {
+          this.treeProps.push(img);
+          this._trackCacheStamp = null; // Invalidate — new tree loaded.
+        }
       };
       img.src = `./public/props/png/trees/tree_${i}.png`;
     }
@@ -67,6 +77,100 @@ export class TrackRenderer {
     this.canvas.height = Math.floor(h * this.dpr);
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this._grass = makeGrassPattern(this.ctx);
+    this._trackCacheStamp = null; // Canvas size changed, force rebuild.
+  }
+
+  /** Fingerprint that changes when strokes are added/removed or props regenerated. */
+  _trackStamp(track) {
+    // Fast — no serialisation, just IDs + count.
+    return track.strokes.map(s => s.id).join(',') + '|' + (track.props?.length ?? 0);
+  }
+
+  /** Serialised view toggles that affect the cached static layer. */
+  _viewKey(view) {
+    return `${view.showTrack ?? true}|${view.showWalls ?? true}|${view.showCenterline ?? true}`;
+  }
+
+  /** Build (or reuse) an off-screen canvas with the full static track scene. */
+  _ensureTrackCache(track, view) {
+    const stamp = this._trackStamp(track);
+    const viewKey = this._viewKey(view);
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+
+    if (
+      this._trackCache &&
+      this._trackCacheStamp === stamp &&
+      this._trackCacheView === viewKey &&
+      this._trackCache.width === cw &&
+      this._trackCache.height === ch
+    ) {
+      return this._trackCache;
+    }
+
+    // Create or resize the off-screen canvas.
+    if (!this._trackCache || this._trackCache.width !== cw || this._trackCache.height !== ch) {
+      this._trackCache = document.createElement('canvas');
+      this._trackCache.width = cw;
+      this._trackCache.height = ch;
+    }
+
+    const octx = this._trackCache.getContext('2d');
+    octx.clearRect(0, 0, cw, ch);
+    octx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+
+    // --- background grass ---
+    octx.fillStyle = this._grass || '#48622a';
+    octx.fillRect(0, 0, w, h);
+    const grad = octx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.max(w, h) * 0.75);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.35)');
+    octx.fillStyle = grad;
+    octx.fillRect(0, 0, w, h);
+
+    // --- ground layer ---
+    for (const s of track.strokes) drawStroke(octx, s, view);
+
+    // --- props ---
+    if (track.props) {
+      const baseSizes = { tyre_stack_1: 120, rocks: 100 };
+      for (const p of track.props) {
+        if (p.type === 'rocks') continue;
+        if (p.type === 'tree' || p.type === 'tree_1' || p.type === 'tree_2') {
+          const fallbackIndex = p.type === 'tree_2' ? 1 : 0;
+          drawTreeProp(octx, p, this.treeProps, fallbackIndex);
+          continue;
+        }
+        const img = this.loadedProps[p.type];
+        if (img && img.complete && img.naturalWidth > 0) {
+          const base = baseSizes[p.type] ?? 120;
+          const aspect = img.naturalWidth / img.naturalHeight;
+          const ph = base * p.scale;
+          const pw = ph * aspect;
+          if (p.type === 'tyre_stack_1') drawTyreShadow(octx, p.x, p.y, pw, ph);
+          octx.drawImage(img, p.x - pw / 2, p.y - ph / 2, pw, ph);
+        }
+      }
+    }
+
+    // --- bridge deck overlays ---
+    const { bridgeLayers, maxElevation } = collectBridgeLayers(track.strokes);
+    for (let elev = 1; elev <= Math.max(1, maxElevation); elev++) {
+      const bridges = bridgeLayers.get(elev) || [];
+      drawBridgeDeckOverlays(octx, bridges, view);
+    }
+
+    // --- start / finish gates ---
+    if (view.showTrack ?? true) {
+      for (const s of track.strokes) drawStrokeGates(octx, s);
+    }
+
+    this._trackCacheStamp = stamp;
+    this._trackCacheView = viewKey;
+    return this._trackCache;
   }
 
   draw({ track, editor, view, simulation = null }) {
@@ -74,10 +178,41 @@ export class TrackRenderer {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
 
+    if (simulation && !editor.enabled && !editor.drawing) {
+      // ── Fast path: blit cached static track, then draw dynamic elements only ──
+      const cache = this._ensureTrackCache(track, view);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(cache, 0, 0);
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+      const { bridgeLayers, maxElevation } = collectBridgeLayers(track.strokes);
+      const maxCarElevation = Math.max(0, ...simulation.agents.map(a => a.renderElevation ?? a.elevation ?? 0));
+
+      drawSimulation(ctx, simulation, view, 0);
+
+      for (let elev = 1; elev <= Math.max(1, maxElevation, maxCarElevation); elev++) {
+        // Bridge deck overlays are already in the cache, but if cars are on elevated
+        // layers we need the deck painted *before* the car. Since the cache already
+        // has them, we only re-draw a bridge deck if there are cars at this elevation.
+        const hasCarsAtElev = simulation.agents.some(a =>
+          (a.alive || a.crashed) && (a.renderElevation ?? a.elevation) === elev);
+        if (hasCarsAtElev) {
+          const bridges = bridgeLayers.get(elev) || [];
+          drawBridgeDeckOverlays(ctx, bridges, view);
+        }
+        drawSimulation(ctx, simulation, view, elev);
+      }
+
+      return;
+    }
+
+    // ── Full path (editor mode / no simulation) ──
+    // Invalidate the cache when in editor mode so the next sim frame rebuilds it.
+    this._trackCacheStamp = null;
+
     // --- background grass ---
     ctx.fillStyle = this._grass || '#48622a';
     ctx.fillRect(0, 0, w, h);
-    // soft vignette for depth
     const grad = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.max(w, h) * 0.75);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(1, 'rgba(0,0,0,0.35)');
@@ -87,28 +222,24 @@ export class TrackRenderer {
     // --- ground layer (0) ---
     for (const s of track.strokes) drawStroke(ctx, s, view);
 
-    // --- props (pre-sorted by layer/Y in track.generateProps for correct overlap) ---
-    // Draw before bridge overlays so elevated road decks cover tyre stacks.
+    // --- props ---
     if (track.props) {
       const baseSizes = { tyre_stack_1: 120, rocks: 100 };
       for (const p of track.props) {
-        if (p.type === 'rocks') {
-          continue;
-        }
+        if (p.type === 'rocks') continue;
         if (p.type === 'tree' || p.type === 'tree_1' || p.type === 'tree_2') {
           const fallbackIndex = p.type === 'tree_2' ? 1 : 0;
           drawTreeProp(ctx, p, this.treeProps, fallbackIndex);
           continue;
         }
-
         const img = this.loadedProps[p.type];
         if (img && img.complete && img.naturalWidth > 0) {
           const base = baseSizes[p.type] ?? 120;
           const aspect = img.naturalWidth / img.naturalHeight;
-          const h = base * p.scale;
-          const w = h * aspect;
-          if (p.type === 'tyre_stack_1') drawTyreShadow(ctx, p.x, p.y, w, h);
-          ctx.drawImage(img, p.x - w / 2, p.y - h / 2, w, h);
+          const ph = base * p.scale;
+          const pw = ph * aspect;
+          if (p.type === 'tyre_stack_1') drawTyreShadow(ctx, p.x, p.y, pw, ph);
+          ctx.drawImage(img, p.x - pw / 2, p.y - ph / 2, pw, ph);
         }
       }
     }
@@ -144,7 +275,6 @@ export class TrackRenderer {
     // --- cursor preview ---
     if (editor.enabled && editor.cursor && !editor.drawing) {
       if (editor.strokeCommitted && editor.tool !== 'eraser') {
-        // Show a "locked" cursor to signal one-stroke limit.
         drawCursorLocked(ctx, editor.cursor, editor.brushSize);
       } else {
         drawCursor(ctx, editor.cursor, editor.tool, editor.brushSize);
@@ -224,14 +354,22 @@ function drawRockProp(ctx, p) {
 }
 
 function drawTyreShadow(ctx, x, y, w, h) {
+  // Layered ellipses instead of blur filter for performance.
   ctx.save();
   ctx.translate(x + w * 0.04, y + h * 0.2);
   ctx.rotate(-0.12);
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
-  ctx.filter = 'blur(2px)';
-  ctx.beginPath();
-  ctx.ellipse(0, 0, w * 0.22, h * 0.12, 0, 0, Math.PI * 2);
-  ctx.fill();
+  const rx = w * 0.22, ry = h * 0.12;
+  const layers = [
+    [rx + 4, ry + 2, 'rgba(0, 0, 0, 0.10)'],
+    [rx + 2, ry + 1, 'rgba(0, 0, 0, 0.16)'],
+    [rx,     ry,     'rgba(0, 0, 0, 0.16)'],
+  ];
+  for (const [lrx, lry, fill] of layers) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, lrx, lry, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -249,14 +387,23 @@ function drawTreeProp(ctx, p, treeProps, fallbackIndex = 0) {
 }
 
 function drawTreeShadow(ctx, x, y, w, h) {
+  // Approximate Gaussian blur with layered ellipses — avoids the extremely
+  // expensive ctx.filter='blur()' which triggers compositor pipeline flushes.
   ctx.save();
   ctx.translate(x + w * 0.13, y + h * 0.28);
   ctx.rotate(-0.18);
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
-  ctx.filter = 'blur(5px)';
-  ctx.beginPath();
-  ctx.ellipse(0, 0, w * 0.34, h * 0.16, 0, 0, Math.PI * 2);
-  ctx.fill();
+  const rx = w * 0.34, ry = h * 0.16;
+  const layers = [
+    [rx + 8, ry + 4, 'rgba(0, 0, 0, 0.06)'],
+    [rx + 4, ry + 2, 'rgba(0, 0, 0, 0.10)'],
+    [rx,     ry,     'rgba(0, 0, 0, 0.16)'],
+  ];
+  for (const [lrx, lry, fill] of layers) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, lrx, lry, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -272,11 +419,11 @@ function drawStroke(ctx, s, view) {
 
   if (showTrack) drawRoadShoulders(ctx, s, curbW);
 
-  // 1. drop shadow (always — gives elevation cue, sells the bridge effect)
+  // 1. drop shadow (gives subtle elevation cue)
   ctx.save();
   ctx.translate(2, 4);
   ctx.lineWidth = width + curbW * 1.4 + 4;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
   strokePath(ctx, center);
   ctx.restore();
 
@@ -591,8 +738,6 @@ function drawAsphaltSurface(ctx, center, width) {
 }
 
 function drawBridgeShadow(ctx, stroke, bridge, width, curbW) {
-  // Side-only shadows: a wide center shadow creates dark bands where the bridge
-  // reconnects to the road. Edge shadows preserve elevation without seams.
   const shadowStart = bridge.start != null
     ? bridge.start + width * 0.18
     : bridge.s - Math.max(width * 0.5, bridgeZoneSpan(stroke, bridge) - width * 0.28);
@@ -601,33 +746,32 @@ function drawBridgeShadow(ctx, stroke, bridge, width, curbW) {
     : bridge.s + Math.max(width * 0.5, bridgeZoneSpan(stroke, bridge) - width * 0.28);
   const shadowSamples = sliceArcSamples(stroke, shadowStart, shadowEnd, 3);
   if (shadowSamples.length < 2) return;
-  const edgeOffset = width / 2 + curbW * 0.7;
 
-  const edgePath = side => shadowSamples.map(s => ({
-    x: s.p.x + s.normal.x * edgeOffset * side,
-    y: s.p.y + s.normal.y * edgeOffset * side,
-  }));
+  // Draw a single wide shadow band under the bridge deck.
+  // Uses 'darken' so overlapping bridge shadows don't accumulate.
+  const centerPath = shadowSamples.map(s => s.p);
 
   ctx.save();
-  ctx.lineCap = 'round';
+  ctx.globalCompositeOperation = 'darken';
+  ctx.lineCap = 'butt';
   ctx.lineJoin = 'round';
-  ctx.translate(7, 10);
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.72)';
-  ctx.shadowBlur = 14;
-  ctx.lineWidth = Math.max(10, curbW * 1.8);
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.34)';
-  strokePath(ctx, edgePath(-1));
-  strokePath(ctx, edgePath(1));
-  ctx.restore();
 
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.translate(3, 5);
-  ctx.lineWidth = Math.max(4, curbW * 0.7);
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.34)';
-  strokePath(ctx, edgePath(-1));
-  strokePath(ctx, edgePath(1));
+  // Outer soft penumbra
+  ctx.translate(5, 8);
+  ctx.lineWidth = width + curbW * 2.4;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
+  strokePath(ctx, centerPath);
+
+  // Mid shadow
+  ctx.lineWidth = width + curbW * 1.6;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+  strokePath(ctx, centerPath);
+
+  // Core shadow
+  ctx.lineWidth = width + curbW * 0.6;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
+  strokePath(ctx, centerPath);
+
   ctx.restore();
 }
 
@@ -788,14 +932,25 @@ function drawSimulation(ctx, simulation, view, targetElevation = 0) {
 }
 
 function drawSkidMarks(ctx, skids) {
+  if (!skids.length) return;
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineWidth = 2;
+  // Batch skid marks by quantized alpha to reduce draw calls from ~500 to ~10.
+  const buckets = new Map();
   for (const skid of skids) {
-    ctx.strokeStyle = `rgba(5, 7, 12, ${skid.alpha * skid.life})`;
+    const a = Math.round(skid.alpha * skid.life * 20) / 20; // quantize to 0.05 steps
+    if (a <= 0) continue;
+    if (!buckets.has(a)) buckets.set(a, []);
+    buckets.get(a).push(skid);
+  }
+  for (const [alpha, batch] of buckets) {
+    ctx.strokeStyle = `rgba(5, 7, 12, ${alpha})`;
     ctx.beginPath();
-    ctx.moveTo(skid.x1, skid.y1);
-    ctx.lineTo(skid.x2, skid.y2);
+    for (const skid of batch) {
+      ctx.moveTo(skid.x1, skid.y1);
+      ctx.lineTo(skid.x2, skid.y2);
+    }
     ctx.stroke();
   }
   ctx.restore();
@@ -1075,8 +1230,14 @@ function sampleAt(stroke, s) {
   const { center, lengths, totalLength } = stroke;
   if (totalLength <= 0) return null;
   const sc = Math.max(0, Math.min(totalLength, s));
-  let i = 1;
-  while (i < lengths.length - 1 && lengths[i] < sc) i++;
+  // Binary search for the segment containing arc-length sc.
+  let lo = 1, hi = lengths.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (lengths[mid] < sc) lo = mid + 1;
+    else hi = mid;
+  }
+  const i = lo;
   const segLen = (lengths[i] - lengths[i - 1]) || 1;
   const t = (sc - lengths[i - 1]) / segLen;
   const a = center[i - 1], b = center[i];

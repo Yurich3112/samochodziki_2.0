@@ -5,6 +5,10 @@ const OUTPUTS = 4;
 export class NeuralNetwork {
   constructor(weights = randomWeights()) {
     this.weights = weights.length === weightCount() ? weights : randomWeights();
+    // Pre-allocated buffers — avoids creating two new Arrays on every think() call.
+    // At 16x speed with 30 agents this saves ~960 array allocations per frame.
+    this._hidden = new Float64Array(HIDDEN);
+    this._outputs = new Float64Array(OUTPUTS);
   }
 
   static random() {
@@ -17,15 +21,15 @@ export class NeuralNetwork {
 
   think(inputs) {
     const w = this.weights;
+    const hidden = this._hidden;
+    const outputs = this._outputs;
     let k = 0;
-    const hidden = new Array(HIDDEN);
     for (let h = 0; h < HIDDEN; h++) {
       let sum = w[k++]; // bias
       for (let i = 0; i < INPUTS; i++) sum += inputs[i] * w[k++];
       hidden[h] = Math.tanh(sum);
     }
 
-    const outputs = new Array(OUTPUTS);
     for (let o = 0; o < OUTPUTS; o++) {
       let sum = w[k++];
       for (let h = 0; h < HIDDEN; h++) sum += hidden[h] * w[k++];

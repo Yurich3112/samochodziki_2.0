@@ -166,15 +166,17 @@ export class Simulation {
     this.leader = this.agents[0] ?? null;
   }
 
-  update(dt) {
+  update(dt, isLastTick = true) {
     if (!this.running || !this.trackStroke) return;
     const step = Math.min(dt, 1 / 30);
     this.generationTime += step;
 
     let firstFinisher = null;
+    let anyAlive = false;
     for (const agent of this.agents) {
       if (!agent.alive) continue;
-      updateAgent(agent, this.trackStroke, this.wallSegments, this.wallCache, step, this.skidMarks, this.progressBenchmark, this.stage);
+      anyAlive = true;
+      updateAgent(agent, this.trackStroke, this.wallSegments, this.wallCache, step, this.skidMarks, this.progressBenchmark, this.stage, isLastTick);
       if (agent.finished && !firstFinisher) {
         firstFinisher = agent;
       }
@@ -189,10 +191,13 @@ export class Simulation {
       return;
     }
 
-    this.leader = selectStageLeader(this.agents, this.stage);
-    trimSkids(this.skidMarks);
+    // Only update leader / trim skids on the last tick of a batch — they're visual-only.
+    if (isLastTick) {
+      this.leader = selectStageLeader(this.agents, this.stage);
+      trimSkids(this.skidMarks);
+    }
 
-    if (this.agents.every(agent => !agent.alive)) {
+    if (!anyAlive) {
       this.advanceGeneration();
     }
   }
@@ -260,7 +265,11 @@ export class Simulation {
   }
 }
 
-function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBenchmark = 0, stage = STAGE_LEARNING) {
+// Pre-allocated input buffer — avoids creating a new array with spread+map
+// on every tick for every agent (480 allocations/frame at 16x → 0).
+const _inputBuf = new Float64Array(SENSOR_ANGLES.length + 2);
+
+function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBenchmark = 0, stage = STAGE_LEARNING, isLastTick = true) {
   const carModel = getCarModel(agent.modelId);
   const physics = carModel.physics;
   const maxVelocity = 310 * physics.topSpeed;
@@ -278,12 +287,14 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
   const activeWalls = bridgeAwareWalls(stroke, walls, bridgeState, wallCache);
   castSensors(agent, activeWalls, agent.sensors, agent.sensorHits);
   const angleToRoad = wrapAngle(center.heading - agent.heading) / Math.PI;
-  const inputs = [
-    ...agent.sensors.map(d => d / SENSOR_RANGE),
-    speedNorm,
-    angleToRoad,
-  ];
-  const [leftOut, rightOut, gasOut, brakeOut] = agent.brain.think(inputs);
+
+  // Fill pre-allocated input buffer instead of allocating a new array.
+  const sLen = SENSOR_ANGLES.length;
+  const invRange = 1 / SENSOR_RANGE;
+  for (let si = 0; si < sLen; si++) _inputBuf[si] = agent.sensors[si] * invRange;
+  _inputBuf[sLen] = speedNorm;
+  _inputBuf[sLen + 1] = angleToRoad;
+  const [leftOut, rightOut, gasOut, brakeOut] = agent.brain.think(_inputBuf);
 
   const steerLeft = positiveOutput(leftOut);
   const steerRight = positiveOutput(rightOut);
@@ -310,12 +321,13 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
   const absVel = Math.abs(agent.velocity);
   const turnSpeedFactor = clamp(absVel / 45, 0, 1.18);
   agent.heading += turnRate * dt * turnSpeedFactor;
-  const drift = clamp(Math.abs(agent.steer) * Math.abs(agent.velocity) / (260 * physics.grip), 0, 1);
+  const drift = clamp(Math.abs(agent.steer) * absVel / (260 * physics.grip), 0, 1);
   const moveHeading = agent.heading - agent.steer * drift * (0.28 / physics.grip);
   agent.x += Math.cos(moveHeading) * agent.velocity * dt;
   agent.y += Math.sin(moveHeading) * agent.velocity * dt;
 
-  if (drift > 0.34 && Math.abs(agent.velocity) > 90) {
+  // Skid marks are visual-only — skip on intermediate ticks at high speed.
+  if (isLastTick && drift > 0.34 && absVel > 90) {
     addSkid(agent, skidMarks, drift);
   }
 
@@ -323,7 +335,10 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
   agent.centerIndex = afterCenter.index;
   const afterBridgeState = bridgeStateAt(stroke, afterCenter.s);
   agent.elevation = afterBridgeState.elevation;
-  agent.renderElevation = bridgeVisualElevation(stroke, afterCenter.s, CAR_BRIDGE_VISUAL_MARGIN);
+  // Visual elevation is only needed for rendering — skip on intermediate ticks.
+  if (isLastTick) {
+    agent.renderElevation = bridgeVisualElevation(stroke, afterCenter.s, CAR_BRIDGE_VISUAL_MARGIN);
+  }
   agent.bridgeLayer = afterBridgeState.layer;
   const collisionWalls = bridgeAwareWalls(stroke, walls, afterBridgeState, wallCache);
   const swept = segmentHitsWalls({ x: agent.prevX, y: agent.prevY }, { x: agent.x, y: agent.y }, collisionWalls);
@@ -611,38 +626,48 @@ function pointOnRoad(stroke, x, y, referenceS = null) {
 }
 
 function nearestCenterline(stroke, x, y, referenceS = null) {
-  let best = { dist: Infinity, score: Infinity, s: 0, heading: 0 };
+  // Hot path: called 2× per agent per tick. Avoid object allocation in inner loop.
+  let bestDist = Infinity, bestScore = Infinity, bestS = 0, bestHeading = 0, bestIndex = 0;
   const continuityWindow = referenceS == null ? Infinity : Math.max(stroke.width * 2.4, 160);
   const ranges = centerlineSearchRanges(stroke, referenceS, continuityWindow);
-  for (const [start, end] of ranges) {
-    for (let i = start; i <= end; i++) {
-      const a = stroke.center[i - 1];
-      const b = stroke.center[i];
+  const centerPts = stroke.center;
+  const lengths = stroke.lengths;
+  const closed = stroke.closed;
+  const totalLen = stroke.totalLength;
+  const hasRef = referenceS != null;
+  for (let r = 0; r < ranges.length; r++) {
+    const rStart = ranges[r][0], rEnd = ranges[r][1];
+    for (let i = rStart; i <= rEnd; i++) {
+      const a = centerPts[i - 1];
+      const b = centerPts[i];
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const len2 = dx * dx + dy * dy || 1;
-      const t = clamp(((x - a.x) * dx + (y - a.y) * dy) / len2, 0, 1);
-      const px = a.x + dx * t;
-      const py = a.y + dy * t;
-      const dist = Math.hypot(x - px, y - py);
-      const s = stroke.lengths[i - 1] + Math.hypot(dx, dy) * t;
-      const arcPenalty = referenceS == null ? 0 : arcDistanceForSearch(stroke, s, referenceS) * 0.18;
-      const score = dist + arcPenalty;
-      if (score < best.score) {
-        best = {
-          dist,
-          score,
-          s,
-          heading: Math.atan2(dy, dx),
-          index: i,
-        };
+      let t = ((x - a.x) * dx + (y - a.y) * dy) / len2;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      const ex = x - (a.x + dx * t);
+      const ey = y - (a.y + dy * t);
+      const dist = Math.sqrt(ex * ex + ey * ey);
+      const segLen = Math.sqrt(len2);
+      const s = lengths[i - 1] + segLen * t;
+      let score = dist;
+      if (hasRef) {
+        const d = Math.abs(s - referenceS);
+        score += (closed ? Math.min(d, totalLen - d) : d) * 0.18;
+      }
+      if (score < bestScore) {
+        bestDist = dist;
+        bestScore = score;
+        bestS = s;
+        bestHeading = Math.atan2(dy, dx);
+        bestIndex = i;
       }
     }
   }
-  if (!Number.isFinite(best.dist) && referenceS != null) {
+  if (!Number.isFinite(bestDist) && hasRef) {
     return nearestCenterline(stroke, x, y, null);
   }
-  return best;
+  return { dist: bestDist, score: bestScore, s: bestS, heading: bestHeading, index: bestIndex };
 }
 
 function arcDistanceForSearch(stroke, a, b) {
