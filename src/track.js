@@ -302,9 +302,9 @@ function findPropSpot(strokes, bounds, clearance, attempts) {
   return null;
 }
 
-function isPropSpotClear(strokes, x, y, clearance) {
+function isPropSpotClear(strokes, x, y, clearance, widthMultiplier = 0.9) {
   for (const s of strokes) {
-    const minDist = s.width * 0.9 + clearance;
+    const minDist = s.width * widthMultiplier + clearance;
     for (let i = 1; i < s.center.length; i++) {
       if (pointToSegmentDist(x, y, s.center[i - 1], s.center[i]) < minDist) return false;
     }
@@ -319,7 +319,7 @@ function propLayer(type) {
 }
 
 function addTyreStack(props, strokes, x, y, scale) {
-  if (!isPropSpotClear(strokes, x, y, 12)) return false;
+  if (!isPropSpotClear(strokes, x, y, 12, 0.5)) return false;
   props.push({ type: 'tyre_stack_1', x, y, scale });
   return true;
 }
