@@ -262,11 +262,15 @@ export class TrackRenderer {
     }
 
     // --- cursor preview ---
-    if (editor.enabled && editor.cursor && !editor.drawing) {
-      if (editor.strokeCommitted && editor.tool !== 'eraser') {
-        drawCursorLocked(ctx, editor.cursor, editor.brushSize);
-      } else {
-        drawCursor(ctx, editor.cursor, editor.tool, editor.brushSize);
+    if (editor.enabled && editor.cursor) {
+      if (!editor.drawing) {
+        if (editor.strokeCommitted && editor.tool !== 'eraser') {
+          drawCursorLocked(ctx, editor.cursor, editor.brushSize);
+        } else {
+          drawCursor(ctx, editor.cursor, editor.tool, editor.brushSize);
+        }
+      } else if (editor.brushPos) {
+        drawLazyBrush(ctx, editor.cursor, editor.brushPos, editor.brushSize);
       }
     }
 
@@ -1175,6 +1179,35 @@ function drawCursorLocked(ctx, p, brushSize) {
   ctx.moveTo(p.x - 4, p.y - 4); ctx.lineTo(p.x + 4, p.y + 4);
   ctx.moveTo(p.x + 4, p.y - 4); ctx.lineTo(p.x - 4, p.y + 4);
   ctx.stroke();
+  ctx.restore();
+}
+
+function drawLazyBrush(ctx, cursor, brushPos, brushSize) {
+  ctx.save();
+  
+  // The string
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(cursor.x, cursor.y);
+  ctx.lineTo(brushPos.x, brushPos.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // The actual brush head (the circle where the track is drawn)
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+  ctx.beginPath();
+  ctx.arc(brushPos.x, brushPos.y, brushSize / 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // The cursor position (where the user's mouse is)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.beginPath();
+  ctx.arc(cursor.x, cursor.y, 3, 0, Math.PI * 2);
+  ctx.fill();
+
   ctx.restore();
 }
 

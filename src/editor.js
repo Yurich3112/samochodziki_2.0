@@ -13,6 +13,7 @@ export class TrackEditor {
     this.erasing = false;
     this.activePointerId = null;
     this.currentPoints = [];
+    this.brushPos = null;
     this.cursor = null;          // last known cursor position (for hover preview)
     this.hoveredStroke = null;   // stroke under cursor while in eraser mode
 
@@ -71,7 +72,8 @@ export class TrackEditor {
     if (this.strokeCommitted) return;
 
     this.drawing = true;
-    this.currentPoints = [p];
+    this.brushPos = { ...p };
+    this.currentPoints = [this.brushPos];
     this._onChange();
   }
 
@@ -83,9 +85,27 @@ export class TrackEditor {
     this.cursor = p;
 
     if (this.drawing) {
-      const last = this.currentPoints[this.currentPoints.length - 1];
-      if (Math.hypot(p.x - last.x, p.y - last.y) >= this.minSampleDist) {
-        this.currentPoints.push(p);
+      // Lazy brush / pulled string logic
+      const lazyRadius = Math.max(30, this.brushSize * 0.4); // aggressive smoothing
+      const dx = p.x - this.brushPos.x;
+      const dy = p.y - this.brushPos.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > lazyRadius) {
+        // Move brushPos so it is exactly lazyRadius away from p
+        const pullFactor = (dist - lazyRadius) / dist;
+        this.brushPos = {
+          x: this.brushPos.x + dx * pullFactor,
+          y: this.brushPos.y + dy * pullFactor
+        };
+
+        const last = this.currentPoints[this.currentPoints.length - 1];
+        if (Math.hypot(this.brushPos.x - last.x, this.brushPos.y - last.y) >= this.minSampleDist) {
+          this.currentPoints.push(this.brushPos);
+          this._onChange();
+        }
+      } else {
+        // Always trigger redraw so we can draw the pulling string
         this._onChange();
       }
       return;
