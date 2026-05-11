@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generic Race Car SVG - Top View</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #2a2a2a;
+        }
+        svg {
+            max-width: 100%;
+            height: 90vh;
+            filter: drop-shadow(0 10px 15px rgba(0,0,0,0.5));
+        }
+    </style>
+</head>
+<body>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 800">
+        <!-- Wheels -->
+        <rect x="55" y="160" width="40" height="90" rx="8" fill="#111" />
+        <rect x="305" y="160" width="40" height="90" rx="8" fill="#111" />
+        <rect x="55" y="520" width="40" height="90" rx="8" fill="#111" />
+        <rect x="305" y="520" width="40" height="90" rx="8" fill="#111" />
+
+        <!-- Front Splitter -->
+        <path d="M80,100 L120,70 L280,70 L320,100 Z" fill="#1a1a1a" />
+        
+        <!-- Rear Diffuser -->
+        <path d="M100,700 L120,730 L280,730 L300,700 Z" fill="#1a1a1a" />
+        <rect x="140" y="700" width="6" height="30" fill="#000" />
+        <rect x="180" y="700" width="6" height="30" fill="#000" />
+        <rect x="214" y="700" width="6" height="30" fill="#000" />
+        <rect x="254" y="700" width="6" height="30" fill="#000" />
+
+        <!-- Main Body (Widebody GT contour) -->
+        <path d="
+            M 120,80 
+            L 280,80 
+            C 310,80 320,120 320,170 
+            L 330,280 
+            L 330,520 
+            L 320,630 
+            C 320,680 310,710 280,710 
+            L 120,710 
+            C 90,710 80,680 80,630 
+            L 70,520 
+            L 70,280 
+            L 80,170 
+            C 80,120 90,80 120,80 
+            Z" fill="#1d4ed8"/>
+
+        <!-- Racing Stripes (Base) -->
+        <rect x="175" y="80" width="18" height="630" fill="#ffffff" />
+        <rect x="207" y="80" width="18" height="630" fill="#ffffff" />
+
+        <!-- Hood Vents -->
+        <path d="M120,150 L160,140 L160,200 L120,200 Z" fill="#111" />
+        <path d="M280,150 L240,140 L240,200 L280,200 Z" fill="#111" />
+        
+        <!-- Headlights -->
+        <path d="M85,90 L125,85 L135,130 L90,130 Z" fill="#e5e7eb" />
+        <path d="M315,90 L275,85 L265,130 L310,130 Z" fill="#e5e7eb" />
+        <polygon points="90,95 120,90 125,125 95,125" fill="#fef08a" />
+        <polygon points="310,95 280,90 275,125 305,125" fill="#fef08a" />
+
+        <!-- Taillights -->
+        <path d="M85,695 L130,695 L135,705 L80,705 Z" fill="#dc2626" />
+        <path d="M315,695 L270,695 L265,705 L320,705 Z" fill="#dc2626" />
+
+        <!-- Greenhouse (Windows Base / Blackout) -->
+        <path d="
+            M 120,250 
+            L 280,250 
+            L 305,320 
+            L 305,500 
+            L 280,570 
+            L 120,570 
+            L 95,500 
+            L 95,320 
+            Z" fill="#111827" />
+
+        <!-- Roof -->
+        <path d="M 130,300 L 270,300 L 270,520 L 130,520 Z" fill="#1d4ed8" />
+        
+        <!-- Roof Stripes -->
+        <rect x="175" y="300" width="18" height="220" fill="#ffffff" />
+        <rect x="207" y="300" width="18" height="220" fill="#ffffff" />
+
+        <!-- Windshield Glare/Reflection -->
+        <polygon points="125,255 275,255 240,295 130,295" fill="#374151" />
+        <!-- Rear Window Glare -->
+        <polygon points="135,525 265,525 275,565 125,565" fill="#374151" />
+
+        <!-- Side Mirrors -->
+        <path d="M 90,300 L 60,300 L 60,325 L 95,315 Z" fill="#1d4ed8" />
+        <path d="M 310,300 L 340,300 L 340,325 L 305,315 Z" fill="#1d4ed8" />
+
+        <!-- Fuel Door -->
+        <circle cx="295" cy="590" r="12" fill="#111827" />
+        <circle cx="295" cy="590" r="10" fill="#9ca3af" />
+
+        <!-- Rear Wing Mounts -->
+        <rect x="140" y="660" width="12" height="45" fill="#111" />
+        <rect x="248" y="660" width="12" height="45" fill="#111" />
+
+        <!-- Rear Wing Main Element -->
+        <rect x="60" y="680" width="280" height="35" rx="4" fill="#1f2937" />
+        
+        <!-- Rear Wing Endplates -->
+        <rect x="55" y="670" width="12" height="55" rx="3" fill="#1d4ed8" />
+        <rect x="333" y="670" width="12" height="55" rx="3" fill="#1d4ed8" />
+    </svg>
+</body>
+</html>

@@ -3,6 +3,8 @@ import { TrackEditor } from './editor.js';
 import { TrackRenderer } from './render.js';
 import { Simulation } from './simulation.js';
 import { networkShape } from './brain.js';
+import { CAR_MODELS } from './carModels.js';
+import { drawCar } from './carSprite.js';
 
 const canvas = document.getElementById('stage-canvas');
 const track = new Track();
@@ -26,6 +28,7 @@ let lastT = performance.now();
 let lastHudT = 0;
 const timeScales = [1, 2, 4, 8];
 let timeScaleIndex = 0;
+let selectedCarIndex = 0;
 
 const editor = new TrackEditor(canvas, track, {
   brushSize: 90,
@@ -43,7 +46,7 @@ function setMode(nextMode) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
   if (mode === 'simulate') {
     editor.enabled = false;
-    simulation.start();
+    simulation.prepare();
   } else {
     simulation.stop();
     editor.enabled = true;
@@ -105,9 +108,8 @@ document.getElementById('clear-track').addEventListener('click', () => {
 document.getElementById('start-pause').addEventListener('click', () => {
   if (mode !== 'simulate') {
     setMode('simulate');
-  } else {
-    simulation.toggle();
   }
+  simulation.toggle();
   requestRedraw();
 });
 document.getElementById('fast-forward').addEventListener('click', () => {
@@ -116,11 +118,7 @@ document.getElementById('fast-forward').addEventListener('click', () => {
   updateFastForwardButton();
 });
 document.getElementById('next-generation').addEventListener('click', () => {
-  if (!simulation.trackStroke && !simulation.start()) return;
-  simulation.ga.nextGeneration(simulation.agents);
-  simulation.spawnGeneration();
-  simulation.running = true;
-  simulation.status = 'RUNNING';
+  if (!simulation.skipGeneration()) return;
   setMode('simulate');
 });
 document.getElementById('reset-simulation').addEventListener('click', () => {
@@ -129,6 +127,8 @@ document.getElementById('reset-simulation').addEventListener('click', () => {
   simulation.reset();
   setMode('simulate');
 });
+document.getElementById('car-prev')?.addEventListener('click', () => selectCar(-1));
+document.getElementById('car-next')?.addEventListener('click', () => selectCar(1));
 
 // --- render loop ---
 function frame(t) {
@@ -151,14 +151,19 @@ window.addEventListener('resize', requestRedraw);
 requestAnimationFrame(frame);
 updateFastForwardButton();
 updateEditorUiState();
+updateCarSelector();
 
 function updateHud(t = performance.now()) {
   if (t - lastHudT < 120) return;
   lastHudT = t;
   updateEditorUiState();
   const stats = simulation.getStats();
+  const racing = stats.stage === 'race';
   text('generation-count', stats.generation);
-  text('best-distance', Math.round(stats.bestDistance));
+  text('stage-label', racing ? 'Stage 2: Race for best time' : 'Stage 1: Learn track');
+  text('best-metric-label', racing ? 'Best track time' : 'Best distance');
+  text('best-distance', racing ? formatPreciseTime(stats.bestTrackTime) : Math.round(stats.bestDistance));
+  text('best-distance-unit', racing ? '' : ' m');
   text('sim-status', stats.status);
   text('active-cars', stats.active);
   text('total-cars', stats.total);
@@ -166,7 +171,8 @@ function updateHud(t = performance.now()) {
   text('time-scale', `${stats.timeScale.toFixed(1)}x`);
   const progress = document.getElementById('generation-progress');
   if (progress) progress.style.width = `${stats.progress.toFixed(1)}%`;
-  updateLeaderboard();
+  updateLeaderboard(stats);
+  updateCarSelector(stats);
   drawNetwork();
   drawHistory(stats);
 }
@@ -238,9 +244,19 @@ function updateFastForwardButton() {
   if (label) label.textContent = `Fast forward ${simulation.timeScale}x`;
 }
 
-function updateLeaderboard() {
+function updateLeaderboard(stats = simulation.getStats()) {
   const el = document.getElementById('leaderboard');
   if (!el) return;
+  const racing = stats.stage === 'race';
+  text('leaderboard-title', racing ? 'Best track time leaderboard' : 'Distance leaderboard');
+  if (racing) {
+    const rows = (stats.bestTimes ?? [])
+      .slice(0, 5)
+      .map((result, i) => `<li><span>${i + 1}. gen ${result.generation}, car ${result.carId + 1}</span><strong>${formatPreciseTime(result.time)}</strong></li>`)
+      .join('');
+    el.innerHTML = rows || '<li><span>Waiting for finish</span><strong>--:--.--</strong></li>';
+    return;
+  }
   const rows = simulation.agents
     .slice()
     .sort((a, b) => b.fitness - a.fitness)
@@ -248,6 +264,72 @@ function updateLeaderboard() {
     .map((a, i) => `<li><span>${i + 1}. car ${a.id + 1}</span><strong>${Math.round(a.maxProgress)} m</strong></li>`)
     .join('');
   el.innerHTML = rows || '<li><span>No cars yet</span><strong>0 m</strong></li>';
+}
+
+function selectCar(direction) {
+  const stats = simulation.getStats();
+  if (stats.carSelectionLocked) return;
+  selectedCarIndex = (selectedCarIndex + direction + CAR_MODELS.length) % CAR_MODELS.length;
+  simulation.setCarModel(CAR_MODELS[selectedCarIndex].id);
+  updateCarSelector(simulation.getStats());
+  requestRedraw();
+}
+
+function updateCarSelector(stats = simulation.getStats()) {
+  const selected = stats.selectedCarModel ?? CAR_MODELS[selectedCarIndex];
+  selectedCarIndex = Math.max(0, CAR_MODELS.findIndex(model => model.id === selected.id));
+  text('car-selector-name', selected.name);
+  text('car-selector-desc', selected.description);
+  text('car-lock-note', stats.carSelectionLocked
+    ? 'Car locked until Reset simulation.'
+    : 'Choose a car before starting the simulation.');
+
+  const prev = document.getElementById('car-prev');
+  const next = document.getElementById('car-next');
+  if (prev) prev.disabled = stats.carSelectionLocked;
+  if (next) next.disabled = stats.carSelectionLocked;
+
+  const statList = document.getElementById('car-stat-list');
+  if (statList) {
+    const labels = {
+      acceleration: 'Acceleration',
+      braking: 'Braking',
+      handling: 'Handling',
+      topSpeed: 'Top speed',
+    };
+    statList.innerHTML = Object.entries(selected.stats)
+      .map(([key, value]) => `
+        <div class="car-stat">
+          <div class="car-stat-label"><span>${labels[key] ?? key}</span><strong>${Math.round(value * 100)}</strong></div>
+          <div class="car-stat-bar"><div style="width:${Math.round(value * 100)}%"></div></div>
+        </div>
+      `)
+      .join('');
+  }
+
+  drawCarPreview(selected.id);
+}
+
+function drawCarPreview(modelId) {
+  const c = document.getElementById('car-preview-canvas');
+  if (!c) return;
+  const ctx = c.getContext('2d');
+  const w = c.width;
+  const h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  const glow = ctx.createRadialGradient(w / 2, h / 2, 12, w / 2, h / 2, 96);
+  glow.addColorStop(0, 'rgba(255, 201, 51, 0.18)');
+  glow.addColorStop(1, 'rgba(255, 201, 51, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, h);
+  drawCar(ctx, {
+    x: w / 2,
+    y: h / 2 + 2,
+    heading: -Math.PI / 2,
+    color: '#ffc933',
+    modelId,
+    brake: 0,
+  }, 0.86);
 }
 
 function drawHistory(stats) {
@@ -260,11 +342,15 @@ function drawHistory(stats) {
   ctx.fillStyle = 'rgba(10, 13, 19, 0.9)';
   ctx.fillRect(0, 0, w, h);
 
-  const history = stats.history ?? [];
+  const racing = stats.stage === 'race';
+  text('history-title', racing ? 'Best track time over generations' : 'Best distance over generations');
+  const history = racing
+    ? (stats.history ?? []).filter(p => Number.isFinite(p.bestTime))
+    : (stats.history ?? []);
   if (!history.length) {
     ctx.fillStyle = '#5d6776';
     ctx.font = '12px Segoe UI, sans-serif';
-    ctx.fillText('No completed generations yet', 42, h / 2);
+    ctx.fillText(racing ? 'No completed race times yet' : 'No completed generations yet', 42, h / 2);
     return;
   }
 
@@ -272,7 +358,8 @@ function drawHistory(stats) {
   const padR = 10;
   const padT = 12;
   const padB = 24;
-  const maxY = Math.max(1, stats.trackLength || 0, ...history.map(p => p.distance));
+  const valueFor = p => racing ? p.bestTime : p.distance;
+  const maxY = Math.max(1, racing ? 0 : stats.trackLength || 0, ...history.map(valueFor));
   const plotW = w - padL - padR;
   const plotH = h - padT - padB;
 
@@ -291,7 +378,8 @@ function drawHistory(stats) {
   ctx.beginPath();
   history.forEach((p, i) => {
     const x = padL + (history.length === 1 ? plotW : (i / (history.length - 1)) * plotW);
-    const y = padT + plotH - (p.distance / maxY) * plotH;
+    const value = valueFor(p);
+    const y = racing ? padT + (value / maxY) * plotH : padT + plotH - (value / maxY) * plotH;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
@@ -300,7 +388,8 @@ function drawHistory(stats) {
   ctx.fillStyle = '#b8ef63';
   history.forEach((p, i) => {
     const x = padL + (history.length === 1 ? plotW : (i / (history.length - 1)) * plotW);
-    const y = padT + plotH - (p.distance / maxY) * plotH;
+    const value = valueFor(p);
+    const y = racing ? padT + (value / maxY) * plotH : padT + plotH - (value / maxY) * plotH;
     ctx.beginPath();
     ctx.arc(x, y, p.finished ? 3.2 : 2.2, 0, Math.PI * 2);
     ctx.fill();
@@ -309,8 +398,8 @@ function drawHistory(stats) {
   ctx.fillStyle = '#8e98a8';
   ctx.font = '10px Segoe UI, sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText(`${Math.round(maxY)}m`, 2, padT + 4);
-  ctx.fillText('0', 12, h - padB + 3);
+  ctx.fillText(racing ? '0s' : `${Math.round(maxY)}m`, 2, padT + 4);
+  ctx.fillText(racing ? `${maxY.toFixed(1)}s` : '0', 6, h - padB + 3);
   ctx.textAlign = 'center';
   ctx.fillText('Generation', padL + plotW / 2, h - 7);
 }
@@ -332,7 +421,7 @@ function drawNetwork() {
     return;
   }
 
-  const xs = [34, w / 2, w - 34];
+  const xs = [28, w / 2 - 12, w - 68];
   const layers = [networkShape.inputs, networkShape.hidden, networkShape.outputs];
   const points = layers.map((count, li) => Array.from({ length: count }, (_, i) => ({
     x: xs[li],
@@ -351,6 +440,16 @@ function drawNetwork() {
       ctx.arc(p.x, p.y, li === 1 ? 5 : 4, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  const outputLabels = ['Left', 'Right', 'Gas', 'Brake'];
+  ctx.font = '9px Segoe UI, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < points[2].length; i++) {
+    const p = points[2][i];
+    ctx.fillStyle = '#8e98a8';
+    ctx.fillText(outputLabels[i] ?? `Out ${i + 1}`, p.x + 11, p.y);
   }
 }
 
@@ -379,4 +478,13 @@ function formatTime(seconds) {
   const s = Math.floor(seconds % 60).toString().padStart(2, '0');
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
   return `${m}:${s}`;
+}
+
+function formatPreciseTime(seconds) {
+  if (!Number.isFinite(seconds)) return '--:--.--';
+  const whole = Math.floor(seconds);
+  const centiseconds = Math.floor((seconds - whole) * 100).toString().padStart(2, '0');
+  const s = (whole % 60).toString().padStart(2, '0');
+  const m = Math.floor(whole / 60).toString().padStart(2, '0');
+  return `${m}:${s}.${centiseconds}`;
 }

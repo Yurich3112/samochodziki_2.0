@@ -160,6 +160,7 @@ export class Track {
       if (hit) {
         const removedId = s.id;
         this.strokes.splice(i, 1);
+        this.props = this.props.filter(p => p.type !== 'tyre_stack_1');
         // Drop bridge records that pointed at the removed stroke.
         for (const other of this.strokes) {
           other.bridgesOver = other.bridgesOver.filter(b => b.strokeId !== removedId);
@@ -206,70 +207,25 @@ export class Track {
     minX -= 500; minY -= 500; maxX += 500; maxY += 500;
     
     const area = (maxX - minX) * (maxY - minY);
-    const numTrees = Math.floor(area / 36000);
-    const numRockClusters = Math.floor(area / 140000);
-    const numLoneRocks = Math.floor(area / 90000);
+    const numTrees = Math.floor(area / 150000);
     const bounds = { minX, minY, maxX, maxY };
 
     for (let i = 0; i < numTrees; i++) {
       const spot = findPropSpot(this.strokes, bounds, 90, 14);
       if (!spot) continue;
-      const type = Math.random() < 0.5 ? 'tree_1' : 'tree_2';
-      this.props.push({ type, x: spot.x, y: spot.y, scale: 0.8 + Math.random() * 0.4 });
-    }
-
-    for (let i = 0; i < numRockClusters; i++) {
-      const center = findPropSpot(this.strokes, bounds, 120, 18);
-      if (!center) continue;
-
-      const count = 3 + Math.floor(Math.random() * 6);
-      const radiusX = 28 + Math.random() * 62;
-      const radiusY = 18 + Math.random() * 48;
-      const clusterAngle = Math.random() * Math.PI * 2;
-
-      for (let j = 0; j < count; j++) {
-        const a = Math.random() * Math.PI * 2;
-        const d = Math.sqrt(Math.random());
-        const lx = Math.cos(a) * radiusX * d;
-        const ly = Math.sin(a) * radiusY * d;
-        const ca = Math.cos(clusterAngle);
-        const sa = Math.sin(clusterAngle);
-        const x = center.x + lx * ca - ly * sa;
-        const y = center.y + lx * sa + ly * ca;
-        if (!isPropSpotClear(this.strokes, x, y, 45)) continue;
-
-        this.props.push({
-          type: 'rocks',
-          x,
-          y,
-          scale: 0.55 + Math.random() * 0.65,
-          rotation: Math.random() * Math.PI * 2,
-          variant: Math.floor(Math.random() * 5),
-          shade: Math.random(),
-        });
-      }
-    }
-
-    for (let i = 0; i < numLoneRocks; i++) {
-      const spot = findPropSpot(this.strokes, bounds, 70, 12);
-      if (!spot) continue;
       this.props.push({
-        type: 'rocks',
+        type: 'tree',
         x: spot.x,
         y: spot.y,
-        scale: 0.45 + Math.random() * 0.5,
-        rotation: Math.random() * Math.PI * 2,
-        variant: Math.floor(Math.random() * 5),
-        shade: Math.random(),
+        scale: 1.0 + Math.random() * 0.45,
+        variant: Math.floor(Math.random() * 32),
       });
     }
-    
+
     // 2. Tyre barriers on curved corners (outside of turns only)
     for (const s of this.strokes) {
-      // The tyre SVG has transparent padding and rounded/slanted artwork edges.
-      // Slight overlap makes the stacks read as a continuous physical barrier.
-      const tyreScale = 0.45;
-      const tyreSpacing = 48 * tyreScale * 0.72;
+      const tyreScale = 0.5;
+      const tyreSpacing = 48 * tyreScale * 0.68;
       let nextTyreS = 0;
       let inTyreRun = false;
       const step = 10;
@@ -298,7 +254,9 @@ export class Track {
 
           // Outside of curve: normals point left; right turn = outside is left (-1)
           const dir = diff > 0 ? -1 : 1;
-          const offsetDist = s.width / 2 + 30;
+          const curbW = Math.max(8, s.width * 0.14);
+          const sandShoulder = Math.max(24, s.width * 0.24) + 16;
+          const offsetDist = s.width / 2 + curbW + sandShoulder + 18;
 
           while (nextTyreS <= currentS) {
             if (!isInBridgeZone(s, nextTyreS)) {
@@ -306,7 +264,7 @@ export class Track {
               if (sample) {
                 const px = sample.p.x + sample.normal.x * offsetDist * dir;
                 const py = sample.p.y + sample.normal.y * offsetDist * dir;
-                this.props.push({ type: 'tyre_stack_1', x: px, y: py, scale: tyreScale });
+                addTyreStack(this.props, this.strokes, px, py, tyreScale);
               }
             }
             nextTyreS += tyreSpacing;
@@ -315,6 +273,8 @@ export class Track {
           inTyreRun = false;
         }
       }
+
+      addStartLineTyres(this.props, s, this.strokes);
     }
 
     // 3. Sort by visual layer first, then Y. Trees intentionally render above rocks.
@@ -345,6 +305,44 @@ function propLayer(type) {
   if (type === 'rocks') return 0;
   if (type === 'tyre_stack_1') return 1;
   return 2;
+}
+
+function addTyreStack(props, strokes, x, y, scale) {
+  if (!isPropSpotClear(strokes, x, y, 12)) return false;
+  props.push({ type: 'tyre_stack_1', x, y, scale });
+  return true;
+}
+
+function addStartLineTyres(props, stroke, strokes) {
+  const gate = stroke.gates?.find(g => g.type === 'startFinish' || g.type === 'start');
+  if (!gate) return;
+
+  const s = stroke.lengths[gate.index] ?? 0;
+  const sample = sampleRoadAt(stroke, s);
+  if (!sample) return;
+
+  const curbW = Math.max(8, stroke.width * 0.14);
+  const along = { x: -sample.normal.y, y: sample.normal.x };
+  const offsetDist = stroke.width / 2 + curbW + 18;
+  const spacing = 25;
+  const tyreScale = 0.5;
+
+  for (const side of [-1, 1]) {
+    const base = {
+      x: sample.p.x + sample.normal.x * offsetDist * side,
+      y: sample.p.y + sample.normal.y * offsetDist * side,
+    };
+
+    for (const alongOffset of [-spacing, 0, spacing]) {
+      addTyreStack(
+        props,
+        strokes,
+        base.x + along.x * alongOffset,
+        base.y + along.y * alongOffset,
+        tyreScale,
+      );
+    }
+  }
 }
 
 // ─── Path optimisation helpers ───────────────────────────────────────
@@ -616,6 +614,8 @@ function findSelfCrossings(center, lengths, closed, width) {
   const n = center.length;
   const segCount = n - 1;
   if (segCount < 4) return out;
+  const totalLength = lengths[lengths.length - 1] ?? 0;
+  const nearMissTolerance = Math.max(8, width * 0.18);
 
   for (let i = 1; i < n; i++) {
     for (let j = i + 2; j < n; j++) {
@@ -624,18 +624,35 @@ function findSelfCrossings(center, lengths, closed, width) {
       // In closed loops, first and last segments are also adjacent.
       if (closed && i === 1 && j === n - 1) continue;
 
-      const hit = segIntersect(center[i - 1], center[i], center[j - 1], center[j]);
-      if (!hit) continue;
+      const a0 = center[i - 1];
+      const a1 = center[i];
+      const b0 = center[j - 1];
+      const b1 = center[j];
+      const angleSin = crossingAngleSin(a0, a1, b0, b1);
+      const exactHit = segIntersect(a0, a1, b0, b1);
+      let hit = exactHit;
+      let tA = exactHit?.tAB;
+      let tB = null;
+
+      if (exactHit) {
+        tB = segmentParameter(exactHit, b0, b1);
+      } else {
+        const closest = closestPointsOnSegments(a0, a1, b0, b1);
+        if (closest.dist > nearMissTolerance || angleSin < 0.18) continue;
+        hit = {
+          x: (closest.a.x + closest.b.x) * 0.5,
+          y: (closest.a.y + closest.b.y) * 0.5,
+        };
+        tA = closest.tA;
+        tB = closest.tB;
+      }
 
       const segLenA = lengths[i] - lengths[i - 1];
-      const sA = lengths[i - 1] + hit.tAB * segLenA;
-      const bx = center[j].x - center[j - 1].x;
-      const by = center[j].y - center[j - 1].y;
-      const len2 = bx * bx + by * by || 1;
-      const u = ((hit.x - center[j - 1].x) * bx + (hit.y - center[j - 1].y) * by) / len2;
+      const sA = lengths[i - 1] + tA * segLenA;
       const segLenB = lengths[j] - lengths[j - 1];
-      const sB = lengths[j - 1] + Math.max(0, Math.min(1, u)) * segLenB;
-      if (Math.abs(sA - sB) < width * 0.8) continue;
+      const sB = lengths[j - 1] + Math.max(0, Math.min(1, tB)) * segLenB;
+      const arcGap = closed ? Math.min(Math.abs(sA - sB), totalLength - Math.abs(sA - sB)) : Math.abs(sA - sB);
+      if (arcGap < width * 0.8) continue;
       const upperS = Math.max(sA, sB);
       const lowerS = Math.min(sA, sB);
 
@@ -653,12 +670,52 @@ function findSelfCrossings(center, lengths, closed, width) {
           y: hit.y,
           upperS,
           lowerS,
-          angleSin: crossingAngleSin(center[i - 1], center[i], center[j - 1], center[j]),
+          angleSin,
         });
       }
     }
   }
   return out;
+}
+
+function segmentParameter(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy || 1;
+  return Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+}
+
+function closestPointsOnSegments(a0, a1, b0, b1) {
+  const ux = a1.x - a0.x;
+  const uy = a1.y - a0.y;
+  const vx = b1.x - b0.x;
+  const vy = b1.y - b0.y;
+  const wx = a0.x - b0.x;
+  const wy = a0.y - b0.y;
+  const a = ux * ux + uy * uy;
+  const b = ux * vx + uy * vy;
+  const c = vx * vx + vy * vy;
+  const d = ux * wx + uy * wy;
+  const e = vx * wx + vy * wy;
+  const denom = a * c - b * b;
+  let tA = denom === 0 ? 0 : (b * e - c * d) / denom;
+  let tB = denom === 0 ? 0 : (a * e - b * d) / denom;
+  tA = Math.max(0, Math.min(1, tA));
+  tB = Math.max(0, Math.min(1, tB));
+
+  // Re-clamp each side after the other side moves to an endpoint.
+  if (a > 0) tA = Math.max(0, Math.min(1, (b * tB - d) / a));
+  if (c > 0) tB = Math.max(0, Math.min(1, (b * tA + e) / c));
+
+  const pa = { x: a0.x + ux * tA, y: a0.y + uy * tA };
+  const pb = { x: b0.x + vx * tB, y: b0.y + vy * tB };
+  return {
+    a: pa,
+    b: pb,
+    tA,
+    tB,
+    dist: Math.hypot(pa.x - pb.x, pa.y - pb.y),
+  };
 }
 
 function crossingAngleSin(a0, a1, b0, b1) {

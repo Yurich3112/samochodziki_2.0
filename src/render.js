@@ -19,6 +19,9 @@ const CENTER_DASH = [22, 24];
 const ASPHALT_TOP = '#3d424b';
 const ASPHALT_BOT = '#2c3038';
 const WALL_DARK = '#0b0d11';
+const SAND_INNER = 'rgba(178, 151, 94, 0.58)';
+const SAND_OUTER = 'rgba(139, 125, 77, 0.24)';
+const TREE_VARIANT_LIMIT = 32;
 const ROCK_SHAPES = [
   [[-0.62, -0.18], [-0.32, -0.56], [0.28, -0.52], [0.58, -0.14], [0.46, 0.34], [0.02, 0.54], [-0.48, 0.32]],
   [[-0.52, -0.34], [-0.08, -0.58], [0.46, -0.42], [0.62, 0.04], [0.26, 0.48], [-0.28, 0.44], [-0.62, 0.02]],
@@ -38,11 +41,22 @@ export class TrackRenderer {
     
     // Load props
     this.loadedProps = {};
-    const propNames = ['rocks', 'tree_1', 'tree_2', 'tyre_stack_1'];
-    for (const name of propNames) {
+    this.treeProps = [];
+    const propSources = {
+      rocks: './public/props/rocks.svg',
+      tyre_stack_1: './public/props/tyre_stack_1.svg',
+    };
+    for (const [name, src] of Object.entries(propSources)) {
       const img = new Image();
-      img.src = `./public/props/${name}.svg`;
+      img.src = src;
       this.loadedProps[name] = img;
+    }
+    for (let i = 1; i <= TREE_VARIANT_LIMIT; i++) {
+      const img = new Image();
+      img.onload = () => {
+        if (!this.treeProps.includes(img)) this.treeProps.push(img);
+      };
+      img.src = `./public/props/png/trees/tree_${i}.png`;
     }
   }
 
@@ -61,7 +75,7 @@ export class TrackRenderer {
     const h = this.canvas.clientHeight;
 
     // --- background grass ---
-    ctx.fillStyle = this._grass || '#2d4a2b';
+    ctx.fillStyle = this._grass || '#48622a';
     ctx.fillRect(0, 0, w, h);
     // soft vignette for depth
     const grad = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.max(w, h) * 0.75);
@@ -76,10 +90,14 @@ export class TrackRenderer {
     // --- props (pre-sorted by layer/Y in track.generateProps for correct overlap) ---
     // Draw before bridge overlays so elevated road decks cover tyre stacks.
     if (track.props) {
-      const baseSizes = { tree_1: 120, tree_2: 120, tyre_stack_1: 120, rocks: 100 };
+      const baseSizes = { tyre_stack_1: 120, rocks: 100 };
       for (const p of track.props) {
         if (p.type === 'rocks') {
-          drawRockProp(ctx, p);
+          continue;
+        }
+        if (p.type === 'tree' || p.type === 'tree_1' || p.type === 'tree_2') {
+          const fallbackIndex = p.type === 'tree_2' ? 1 : 0;
+          drawTreeProp(ctx, p, this.treeProps, fallbackIndex);
           continue;
         }
 
@@ -89,6 +107,7 @@ export class TrackRenderer {
           const aspect = img.naturalWidth / img.naturalHeight;
           const h = base * p.scale;
           const w = h * aspect;
+          if (p.type === 'tyre_stack_1') drawTyreShadow(ctx, p.x, p.y, w, h);
           ctx.drawImage(img, p.x - w / 2, p.y - h / 2, w, h);
         }
       }
@@ -103,9 +122,7 @@ export class TrackRenderer {
 
     for (let elev = 1; elev <= Math.max(1, maxElevation, maxCarElevation); elev++) {
       const bridges = bridgeLayers.get(elev) || [];
-      for (const { s, b } of bridges) {
-        drawBridgeDeckOverlay(ctx, s, b, view);
-      }
+      drawBridgeDeckOverlays(ctx, bridges, view);
       if (simulation) drawSimulation(ctx, simulation, view, elev);
     }
 
@@ -206,6 +223,43 @@ function drawRockProp(ctx, p) {
   ctx.restore();
 }
 
+function drawTyreShadow(ctx, x, y, w, h) {
+  ctx.save();
+  ctx.translate(x + w * 0.04, y + h * 0.2);
+  ctx.rotate(-0.12);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+  ctx.filter = 'blur(2px)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, w * 0.22, h * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawTreeProp(ctx, p, treeProps, fallbackIndex = 0) {
+  if (!treeProps.length) return;
+  const img = treeProps[(p.variant ?? fallbackIndex) % treeProps.length];
+  if (!img?.complete || img.naturalWidth <= 0) return;
+
+  const base = 150;
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const h = base * (p.scale ?? 1);
+  const w = h * aspect;
+  drawTreeShadow(ctx, p.x, p.y, w, h);
+  ctx.drawImage(img, p.x - w / 2, p.y - h / 2, w, h);
+}
+
+function drawTreeShadow(ctx, x, y, w, h) {
+  ctx.save();
+  ctx.translate(x + w * 0.13, y + h * 0.28);
+  ctx.rotate(-0.18);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+  ctx.filter = 'blur(5px)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, w * 0.34, h * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawStroke(ctx, s, view) {
   const { center, width } = s;
   const curbW = Math.max(8, width * 0.14);
@@ -215,6 +269,8 @@ function drawStroke(ctx, s, view) {
 
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+
+  if (showTrack) drawRoadShoulders(ctx, s, curbW);
 
   // 1. drop shadow (always — gives elevation cue, sells the bridge effect)
   ctx.save();
@@ -236,19 +292,7 @@ function drawStroke(ctx, s, view) {
     // on tight turns; asphalt is repainted over the middle immediately after.
     drawCurbBands(ctx, s, 0, s.totalLength, curbW);
 
-    // 4. asphalt (two-tone for slight top-down lighting feel)
-    ctx.lineWidth = width;
-    ctx.strokeStyle = ASPHALT_BOT;
-    strokePath(ctx, center);
-    ctx.lineWidth = Math.max(0, width - 6);
-    ctx.strokeStyle = ASPHALT_TOP;
-    strokePath(ctx, center);
-
-    // subtle scuffs/skid gradient — light center band
-    ctx.lineWidth = Math.max(0, width * 0.45);
-    ctx.strokeStyle = 'rgba(255,255,255,0.025)';
-    strokePath(ctx, center);
-    ctx.lineCap = 'round';
+    drawAsphaltSurface(ctx, center, width);
   }
 
   // 6. center yellow dashes
@@ -282,24 +326,70 @@ function sliceArcSamples(stroke, sLo, sHi, step = 3.5) {
 }
 
 /** Full road stack along bridge span only — paints over lower layer roads. */
+function drawBridgeDeckOverlays(ctx, bridgeItems, view) {
+  const groups = mergeBridgeItems(bridgeItems);
+  for (const group of groups) {
+    drawBridgeDeckOverlay(ctx, group.stroke, group, view);
+  }
+}
+
+function mergeBridgeItems(bridgeItems) {
+  const byStroke = new Map();
+  for (const item of bridgeItems) {
+    if (!byStroke.has(item.s)) byStroke.set(item.s, []);
+    byStroke.get(item.s).push(item.b);
+  }
+
+  const groups = [];
+  for (const [stroke, bridges] of byStroke) {
+    const joinGap = Math.max(20, stroke.width * 0.65);
+    const ranges = bridges
+      .map(bridge => {
+        const span = bridgeZoneSpan(stroke, bridge);
+        return {
+          stroke,
+          bridge,
+          start: bridge.s - span,
+          end: bridge.s + span,
+          bridges: [bridge],
+        };
+      })
+      .sort((a, b) => a.start - b.start);
+
+    for (const range of ranges) {
+      const last = groups[groups.length - 1];
+      if (last?.stroke === stroke && range.start <= last.end + joinGap) {
+        last.start = Math.min(last.start, range.start);
+        last.end = Math.max(last.end, range.end);
+        last.bridges.push(range.bridge);
+      } else {
+        groups.push(range);
+      }
+    }
+  }
+
+  return groups;
+}
+
 function drawBridgeDeckOverlay(ctx, stroke, bridge, view) {
   const showTrack = view.showTrack ?? true;
   const showWalls = view.showWalls ?? true;
   const showCenter = view.showCenterline ?? true;
   const { width } = stroke;
   const curbW = Math.max(8, width * 0.14);
-  const span = bridgeZoneSpan(stroke, bridge);
-  const s0 = bridge.s - span;
-  const s1 = bridge.s + span;
+  const s0 = bridge.start ?? bridge.s - bridgeZoneSpan(stroke, bridge);
+  const s1 = bridge.end ?? bridge.s + bridgeZoneSpan(stroke, bridge);
+  const asphaltOverlap = Math.max(5, width * 0.06);
 
   const samples = sliceArcSamples(stroke, s0, s1, 3);
   if (samples.length < 2) return;
+  const asphaltSamples = sliceArcSamples(stroke, s0 - asphaltOverlap, s1 + asphaltOverlap, 3);
 
   const center = samples.map(s => s.p);
+  const asphaltCenter = asphaltSamples.length >= 2 ? asphaltSamples.map(s => s.p) : center;
 
   // Use butt caps so this pass does not create a visible "capsule" patch.
-  // The segment is intentionally long enough that the joins fall outside
-  // the crossing and blend into the original stroke.
+  // Bridge-only curb details must not spill onto normal red/white curbs.
   ctx.lineCap = 'butt';
   ctx.lineJoin = 'round';
 
@@ -313,15 +403,9 @@ function drawBridgeDeckOverlay(ctx, stroke, bridge, view) {
 
     drawCurbBands(ctx, stroke, s0, s1, curbW, 'butt', ['#c0c3ca', '#888b93']);
 
-    ctx.lineWidth = width;
-    ctx.strokeStyle = ASPHALT_BOT;
-    strokePath(ctx, center);
-    ctx.lineWidth = Math.max(0, width - 6);
-    ctx.strokeStyle = ASPHALT_TOP;
-    strokePath(ctx, center);
-    ctx.lineWidth = Math.max(0, width * 0.45);
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    strokePath(ctx, center);
+    // Slightly overpaint only the asphalt so the bridge cap edge does not leave a hairline.
+    // The wider deck and grey curbs stay clipped to the true bridge span.
+    drawAsphaltSurface(ctx, asphaltCenter, width);
   } else if (showWalls) {
     // Track hidden: still block lower road with an opaque band.
     ctx.lineWidth = width + curbW * 0.8;
@@ -330,18 +414,192 @@ function drawBridgeDeckOverlay(ctx, stroke, bridge, view) {
   }
 
   if (showCenter && showTrack) {
-    drawCenterline(ctx, stroke, s0, s1, 'rgba(240, 198, 70, 0.95)');
+    drawCenterline(ctx, stroke, s0 - asphaltOverlap, s1 + asphaltOverlap, 'rgba(240, 198, 70, 0.9)');
   }
 
   // Restore defaults for other passes.
   ctx.lineCap = 'round';
 }
 
+function drawRoadShoulders(ctx, stroke, curbW) {
+  const shoulder = Math.max(24, stroke.width * 0.24);
+  const segments = shoulderSegments(stroke);
+
+  for (const segment of segments) {
+    const { start, end, fadeStart, fadeEnd } = segment;
+    const startS = start;
+    const endS = end;
+    if (endS - startS < 2) continue;
+    for (const side of [-1, 1]) {
+      drawShoulderSide(ctx, stroke, segment, side, curbW, shoulder + 16, SAND_OUTER, 1.15, fadeStart, fadeEnd);
+      drawShoulderSide(ctx, stroke, segment, side, curbW, shoulder, SAND_INNER, 1, fadeStart, fadeEnd);
+    }
+  }
+}
+
+function drawShoulderSide(ctx, stroke, segment, side, curbW, shoulderWidth, color, jitterScale, fadeStart, fadeEnd) {
+  const innerOffset = stroke.width / 2 + curbW * 0.74;
+  const step = 8;
+  const startS = segment.start;
+  const endS = segment.end;
+  const inner = [];
+  const outer = [];
+
+  for (let s = startS; s < endS; s += step) {
+    addShoulderSample(stroke, side, s, segment, innerOffset, shoulderWidth, jitterScale, fadeStart, fadeEnd, inner, outer);
+  }
+  addShoulderSample(stroke, side, endS, segment, innerOffset, shoulderWidth, jitterScale, fadeStart, fadeEnd, inner, outer);
+  if (inner.length < 2 || outer.length < 2) return;
+
+  ctx.beginPath();
+  ctx.moveTo(inner[0].x, inner[0].y);
+  for (let i = 1; i < inner.length; i++) ctx.lineTo(inner[i].x, inner[i].y);
+  for (let i = outer.length - 1; i >= 0; i--) ctx.lineTo(outer[i].x, outer[i].y);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function addShoulderSample(stroke, side, s, segment, innerOffset, shoulderWidth, jitterScale, fadeStart, fadeEnd, inner, outer) {
+  const sample = sampleAt(stroke, s);
+  if (!sample) return;
+
+  const jitter = shoulderJitter(stroke.id ?? 1, side, s) * 10 * jitterScale;
+  const fade = shoulderFadeAt(s, segment, fadeStart, fadeEnd);
+  const innerDist = innerOffset * side;
+  const outerDist = (innerOffset + Math.max(0, shoulderWidth + jitter) * fade) * side;
+  inner.push({
+    x: sample.p.x + sample.normal.x * innerDist,
+    y: sample.p.y + sample.normal.y * innerDist,
+  });
+  outer.push({
+    x: sample.p.x + sample.normal.x * outerDist,
+    y: sample.p.y + sample.normal.y * outerDist,
+  });
+}
+
+function shoulderFadeAt(s, segment, fadeStart, fadeEnd) {
+  const fadeLen = Math.min(54, Math.max(18, (segment.end - segment.start) * 0.35));
+  let fade = 1;
+  if (fadeStart) fade = Math.min(fade, smoothstep(0, fadeLen, s - segment.start));
+  if (fadeEnd) fade = Math.min(fade, smoothstep(0, fadeLen, segment.end - s));
+  return fade;
+}
+
+function smoothstep(edge0, edge1, value) {
+  const t = Math.max(0, Math.min(1, (value - edge0) / Math.max(0.0001, edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function shoulderSegments(stroke) {
+  const total = stroke.totalLength;
+  if (total <= 0) return [];
+  const ranges = bridgeShoulderExclusions(stroke);
+  if (!ranges.length) return [{ start: 0, end: total, fadeStart: false, fadeEnd: false }];
+
+  const segments = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start > cursor + 1) {
+      segments.push({
+        start: cursor,
+        end: range.start,
+        fadeStart: cursor > 0 || stroke.closed,
+        fadeEnd: true,
+      });
+    }
+    cursor = Math.max(cursor, range.end);
+  }
+  if (cursor < total - 1) {
+    segments.push({
+      start: cursor,
+      end: total,
+      fadeStart: true,
+      fadeEnd: stroke.closed,
+    });
+  }
+  return segments;
+}
+
+function bridgeShoulderExclusions(stroke) {
+  const total = stroke.totalLength;
+  const ranges = [];
+
+  for (const bridge of stroke.bridgesOver ?? []) {
+    const span = bridgeZoneSpan(stroke, bridge) + stroke.width * 0.18;
+    addShoulderExclusion(ranges, bridge.s, span, total, stroke.closed);
+  }
+
+  ranges.sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+function addShoulderExclusion(ranges, centerS, span, total, closed) {
+  if (!Number.isFinite(centerS)) return;
+  if (!closed) {
+    ranges.push({
+      start: Math.max(0, centerS - span),
+      end: Math.min(total, centerS + span),
+    });
+    return;
+  }
+
+  const start = centerS - span;
+  const end = centerS + span;
+  if (start < 0) {
+    ranges.push({ start: 0, end: Math.min(total, end) });
+    ranges.push({ start: total + start, end: total });
+  } else if (end > total) {
+    ranges.push({ start, end: total });
+    ranges.push({ start: 0, end: end - total });
+  } else {
+    ranges.push({ start, end });
+  }
+}
+
+function shoulderJitter(strokeId, side, s) {
+  return (noise1d(strokeId * 17 + side * 31 + s * 0.035) - 0.5)
+    + (noise1d(strokeId * 23 + side * 47 + s * 0.11) - 0.5) * 0.55;
+}
+
+function noise1d(n) {
+  const v = Math.sin(n * 12.9898) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+function drawAsphaltSurface(ctx, center, width) {
+  // Keep this shared so bridge overlays match the base road exactly.
+  ctx.lineWidth = width;
+  ctx.strokeStyle = ASPHALT_BOT;
+  strokePath(ctx, center);
+  ctx.lineWidth = Math.max(0, width - 6);
+  ctx.strokeStyle = ASPHALT_TOP;
+  strokePath(ctx, center);
+  ctx.lineWidth = Math.max(0, width * 0.45);
+  ctx.strokeStyle = 'rgba(255,255,255,0.025)';
+  strokePath(ctx, center);
+  ctx.lineCap = 'round';
+}
+
 function drawBridgeShadow(ctx, stroke, bridge, width, curbW) {
   // Side-only shadows: a wide center shadow creates dark bands where the bridge
   // reconnects to the road. Edge shadows preserve elevation without seams.
-  const shadowSpan = Math.max(width * 0.5, bridgeZoneSpan(stroke, bridge) - width * 0.28);
-  const shadowSamples = sliceArcSamples(stroke, bridge.s - shadowSpan, bridge.s + shadowSpan, 3);
+  const shadowStart = bridge.start != null
+    ? bridge.start + width * 0.18
+    : bridge.s - Math.max(width * 0.5, bridgeZoneSpan(stroke, bridge) - width * 0.28);
+  const shadowEnd = bridge.end != null
+    ? bridge.end - width * 0.18
+    : bridge.s + Math.max(width * 0.5, bridgeZoneSpan(stroke, bridge) - width * 0.28);
+  const shadowSamples = sliceArcSamples(stroke, shadowStart, shadowEnd, 3);
   if (shadowSamples.length < 2) return;
   const edgeOffset = width / 2 + curbW * 0.7;
 
@@ -835,23 +1093,23 @@ function makeGrassPattern(ctx) {
   off.width = off.height = size;
   const o = off.getContext('2d');
   // base tone
-  o.fillStyle = '#2d4a2b';
+  o.fillStyle = '#48622a';
   o.fillRect(0, 0, size, size);
   // noisy speckle for texture
   for (let i = 0; i < 2200; i++) {
     const x = Math.random() * size;
     const y = Math.random() * size;
     const v = Math.random();
-    const r = (35 + v * 35) | 0;
-    const g = (60 + v * 50) | 0;
-    const b = (35 + v * 30) | 0;
+    const r = (58 + v * 48) | 0;
+    const g = (82 + v * 62) | 0;
+    const b = (28 + v * 26) | 0;
     o.fillStyle = `rgba(${r},${g},${b},${0.35 + v * 0.4})`;
     const s = 1 + Math.random() * 1.4;
     o.fillRect(x, y, s, s);
   }
   // sparse grass blade ticks
   for (let i = 0; i < 700; i++) {
-    o.strokeStyle = `rgba(${(50 + Math.random() * 40) | 0}, ${(95 + Math.random() * 50) | 0}, ${(50 + Math.random() * 30) | 0}, 0.55)`;
+    o.strokeStyle = `rgba(${(78 + Math.random() * 46) | 0}, ${(118 + Math.random() * 54) | 0}, ${(42 + Math.random() * 24) | 0}, 0.55)`;
     o.lineWidth = 0.7;
     const x = Math.random() * size;
     const y = Math.random() * size;

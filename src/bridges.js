@@ -25,17 +25,29 @@ export function bridgeStateAt(stroke, s) {
   const bridges = stroke.bridgesOver ?? [];
   const levels = resolvedBridgeLevels(stroke);
   const elevation = surfaceLevelAt(stroke, s, levels);
+  let upperState = null;
+  let lowerState = null;
+
   for (let i = 0; i < bridges.length; i++) {
     const bridge = bridges[i];
     if (!bridge.self || bridge.lowerS == null) continue;
     const span = bridgeZoneSpan(stroke, bridge);
     if (isUpperBridgeZone(stroke, bridge, s, span)) {
-      return { layer: 'upper', bridge, span, index: i, elevation: levels.get(bridge) ?? elevation };
+      const bridgeElevation = levels.get(bridge) ?? elevation;
+      if (!upperState || bridgeElevation > upperState.elevation) {
+        upperState = { layer: 'upper', bridge, span, index: i, elevation: bridgeElevation };
+      }
+      continue;
     }
     if (isLowerBridgeZone(stroke, bridge, s, span)) {
-      return { layer: 'lower', bridge, span, index: i, elevation };
+      if (!lowerState || elevation > lowerState.elevation) {
+        lowerState = { layer: 'lower', bridge, span, index: i, elevation };
+      }
     }
   }
+
+  if (upperState) return upperState;
+  if (lowerState) return lowerState;
   return { layer: 'normal', bridge: null, span: 0, index: -1, elevation };
 }
 
@@ -89,7 +101,7 @@ function resolvedBridgeLevels(stroke) {
   for (let pass = 0; pass < bridges.length; pass++) {
     let changed = false;
     for (const bridge of bridges) {
-      const lowerLevel = surfaceLevelAt(stroke, bridge.lowerS, levels, bridge);
+      const lowerLevel = bridgeSupportLevel(stroke, bridge, levels);
       const nextLevel = lowerLevel + 1;
       if ((levels.get(bridge) ?? 1) < nextLevel) {
         levels.set(bridge, nextLevel);
@@ -101,6 +113,24 @@ function resolvedBridgeLevels(stroke) {
 
   bridgeLevelCache.set(stroke, { bridges: stroke.bridgesOver, count: bridges.length, levels });
   return levels;
+}
+
+function bridgeSupportLevel(stroke, bridge, levels) {
+  let level = surfaceLevelAt(stroke, bridge.lowerS, levels, bridge);
+  const contactMargin = stroke.width * 0.45;
+  const lowerSpan = bridgeZoneSpan(stroke, bridge) + contactMargin;
+
+  for (const other of stroke.bridgesOver ?? []) {
+    if (other === bridge || !other.self || other.lowerS == null) continue;
+    const span = bridgeZoneSpan(stroke, other) + contactMargin;
+    // If this bridge's lower pass sits on another bridge deck, it must be one
+    // level above that deck, not merely one level above ground.
+    if (arcDistance(stroke, bridge.lowerS, other.s) <= lowerSpan + span) {
+      level = Math.max(level, levels.get(other) ?? 1);
+    }
+  }
+
+  return level;
 }
 
 function surfaceLevelAt(stroke, s, levels, ignoreBridge = null, margin = 0) {

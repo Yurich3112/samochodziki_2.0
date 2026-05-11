@@ -1,12 +1,16 @@
 import { GeneticAlgorithm } from './brain.js';
 import { bridgeElevation, bridgeStateAt, bridgeVisualElevation } from './bridges.js';
+import { getCarModel } from './carModels.js';
 
 const SENSOR_ANGLES = [-0.9, -0.55, -0.25, 0, 0.25, 0.55, 0.9, Math.PI];
 const SENSOR_RANGE = 170;
 const CAR_LENGTH = 34;
 const CAR_WIDTH = 17;
+const CAR_BRIDGE_VISUAL_MARGIN = CAR_LENGTH * 0.95;
 const COLORS = ['#ef4444', '#3b82f6', '#facc15', '#22c55e', '#a855f7', '#fb923c', '#f8fafc', '#14b8a6'];
 const FINISH_REWARD = 100000;
+const STAGE_LEARNING = 'learning';
+const STAGE_RACE = 'race';
 
 export class Simulation {
   constructor(track) {
@@ -24,22 +28,38 @@ export class Simulation {
     this.progressBenchmark = 0;
     this.skidMarks = [];
     this.status = 'IDLE';
+    this.stage = STAGE_LEARNING;
+    this.bestTrackTime = Infinity;
+    this.bestTimes = [];
+    this.selectedCarModelId = 'sport';
+    this.carSelectionLocked = false;
   }
 
   start() {
+    if (!this.prepare()) return false;
+    this.running = true;
+    this.carSelectionLocked = true;
+    this.status = statusForStage(this.stage);
+    return true;
+  }
+
+  prepare() {
     if (!this.track.strokes.length) {
       this.status = 'DRAW TRACK FIRST';
       return false;
     }
     const selected = selectTrackStroke(this.track);
     if (this.trackStroke !== selected || this.agents.length === 0) {
+      if (this.trackStroke !== selected) {
+        this.resetStageProgress();
+        this.carSelectionLocked = false;
+      }
       this.trackStroke = selected;
       this.wallSegments = buildWallSegments(this.trackStroke);
       this.wallCache = buildWallCache(this.trackStroke, this.wallSegments);
       this.spawnGeneration();
     }
-    this.running = true;
-    this.status = 'RUNNING';
+    if (!this.running) this.status = 'READY';
     return true;
   }
 
@@ -62,9 +82,33 @@ export class Simulation {
     this.progressBenchmark = 0;
     this.skidMarks = [];
     this.generationTime = 0;
+    this.resetStageProgress();
     this.spawnGeneration();
+    this.running = false;
+    this.carSelectionLocked = false;
+    this.status = 'READY';
+  }
+
+  resetStageProgress() {
+    this.stage = STAGE_LEARNING;
+    this.bestTrackTime = Infinity;
+    this.bestTimes = [];
+  }
+
+  setCarModel(id) {
+    if (this.carSelectionLocked) return false;
+    if (getCarModel(id).id !== id) return false;
+    this.selectedCarModelId = id;
+    if (this.trackStroke && this.agents.length) this.spawnGeneration();
+    return true;
+  }
+
+  skipGeneration() {
+    if (!this.prepare()) return false;
+    this.carSelectionLocked = true;
     this.running = true;
-    this.status = 'RUNNING';
+    this.advanceGeneration();
+    return true;
   }
 
   spawnGeneration() {
@@ -83,6 +127,7 @@ export class Simulation {
       id: i,
       brain,
       color: COLORS[i % COLORS.length],
+      modelId: this.selectedCarModelId,
       x: start.x,
       y: start.y,
       prevX: start.x,
@@ -97,6 +142,7 @@ export class Simulation {
       alive: true,
       crashed: false,
       finished: false,
+      finishTime: null,
       progress: 0,
       lap: 0,
       bestS: 0,
@@ -125,43 +171,66 @@ export class Simulation {
     const step = Math.min(dt, 1 / 30);
     this.generationTime += step;
 
-    let alive = 0;
+    let firstFinisher = null;
     for (const agent of this.agents) {
       if (!agent.alive) continue;
-      alive += 1;
-      updateAgent(agent, this.trackStroke, this.wallSegments, this.wallCache, step, this.skidMarks, this.progressBenchmark);
+      updateAgent(agent, this.trackStroke, this.wallSegments, this.wallCache, step, this.skidMarks, this.progressBenchmark, this.stage);
+      if (agent.finished && !firstFinisher) {
+        firstFinisher = agent;
+      }
       if (agent.finished) {
-        this.leader = agent;
-        this.advanceGeneration();
-        return;
+        this.recordBestTrackTime(agent);
       }
     }
 
-    this.leader = selectAliveLeader(this.agents);
+    if (firstFinisher && this.stage === STAGE_LEARNING) {
+      this.leader = firstFinisher;
+      this.advanceGeneration(STAGE_RACE);
+      return;
+    }
+
+    this.leader = selectStageLeader(this.agents, this.stage);
     trimSkids(this.skidMarks);
 
-    if (alive === 0) {
+    if (this.agents.every(agent => !agent.alive)) {
       this.advanceGeneration();
     }
   }
 
-  advanceGeneration() {
+  advanceGeneration(nextStage = this.stage) {
     this.recordGeneration();
+    this.stage = nextStage;
     this.ga.nextGeneration(this.agents);
     this.spawnGeneration();
-    this.status = 'RUNNING';
+    this.status = statusForStage(this.stage);
   }
 
   recordGeneration() {
     if (!this.agents.length) return;
-    const best = this.agents.reduce((winner, agent) => agent.fitness > winner.fitness ? agent : winner, this.agents[0]);
+    const best = selectGenerationWinner(this.agents, this.stage);
+    const bestTime = minFinishTime(this.agents);
     this.generationHistory.push({
       generation: this.ga.generation,
+      stage: this.stage,
       distance: Math.max(...this.agents.map(a => a.maxProgress ?? 0)),
       fitness: best.fitness,
       finished: !!best.finished,
+      bestTime,
     });
     if (this.generationHistory.length > 80) this.generationHistory.shift();
+  }
+
+  recordBestTrackTime(agent) {
+    if (!Number.isFinite(agent.finishTime)) return;
+    if (this.bestTimes.some(result => result.generation === this.ga.generation && result.carId === agent.id)) return;
+    this.bestTrackTime = Math.min(this.bestTrackTime, agent.finishTime);
+    this.bestTimes.push({
+      generation: this.ga.generation,
+      carId: agent.id,
+      time: agent.finishTime,
+    });
+    this.bestTimes.sort((a, b) => a.time - b.time);
+    if (this.bestTimes.length > 12) this.bestTimes.length = 12;
   }
 
   getStats() {
@@ -171,6 +240,9 @@ export class Simulation {
     const leaderProgress = progressPercent(this.leader, this.trackStroke);
     return {
       status: this.status,
+      stage: this.stage,
+      selectedCarModel: getCarModel(this.selectedCarModelId),
+      carSelectionLocked: this.carSelectionLocked,
       generation: this.ga.generation,
       active,
       total: this.agents.length,
@@ -178,6 +250,8 @@ export class Simulation {
       progress: leaderProgress,
       bestFitness,
       bestDistance,
+      bestTrackTime: Number.isFinite(this.bestTrackTime) ? this.bestTrackTime : null,
+      bestTimes: this.bestTimes,
       leaderFitness: this.leader?.fitness ?? 0,
       trackLength: this.trackStroke?.totalLength ?? 0,
       history: this.generationHistory,
@@ -186,14 +260,17 @@ export class Simulation {
   }
 }
 
-function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBenchmark = 0) {
+function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBenchmark = 0, stage = STAGE_LEARNING) {
+  const carModel = getCarModel(agent.modelId);
+  const physics = carModel.physics;
+  const maxVelocity = 310 * physics.topSpeed;
   agent.age += dt;
   agent.prevX = agent.x;
   agent.prevY = agent.y;
   const prevVelocity = agent.velocity;
   const prevSteer = agent.steer;
 
-  const speedNorm = clamp(agent.velocity / 270, -1, 1);
+  const speedNorm = clamp(agent.velocity / (270 * physics.topSpeed), -1, 1);
   const center = nearestCenterline(stroke, agent.x, agent.y, agent.lastS);
   agent.centerIndex = center.index;
   const bridgeState = bridgeStateAt(stroke, center.s);
@@ -220,21 +297,21 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
   const brake = positiveOutput(brakeOut);
   agent.throttle = throttle;
   agent.brake = brake;
-  const rollingDrag = 28 + agent.velocity * 0.035;
-  const accel = throttle * 285 - brake * 540 - rollingDrag;
+  const rollingDrag = 28 + agent.velocity * (0.035 / physics.topSpeed);
+  const accel = throttle * 285 * physics.acceleration - brake * 540 * physics.braking - rollingDrag;
   agent.velocity += accel * dt;
   agent.velocity *= Math.pow(0.985, dt * 60);
   if (brake > 0.25 && agent.velocity < 6) agent.velocity = 0;
-  agent.velocity = clamp(agent.velocity, 0, 310);
+  agent.velocity = clamp(agent.velocity, 0, maxVelocity);
 
-  const turnRate = agent.steer * (3.15 / (1 + Math.abs(agent.velocity) * 0.0065));
+  const turnRate = agent.steer * ((3.15 * physics.handling) / (1 + Math.abs(agent.velocity) * 0.0065));
   // Turn rate must be 0 when stationary so cars can't spin in place.
   // Ramp up turn factor linearly at low speeds, then cap at higher speeds.
   const absVel = Math.abs(agent.velocity);
   const turnSpeedFactor = clamp(absVel / 45, 0, 1.18);
   agent.heading += turnRate * dt * turnSpeedFactor;
-  const drift = clamp(Math.abs(agent.steer) * Math.abs(agent.velocity) / 260, 0, 1);
-  const moveHeading = agent.heading - agent.steer * drift * 0.28;
+  const drift = clamp(Math.abs(agent.steer) * Math.abs(agent.velocity) / (260 * physics.grip), 0, 1);
+  const moveHeading = agent.heading - agent.steer * drift * (0.28 / physics.grip);
   agent.x += Math.cos(moveHeading) * agent.velocity * dt;
   agent.y += Math.sin(moveHeading) * agent.velocity * dt;
 
@@ -246,7 +323,7 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
   agent.centerIndex = afterCenter.index;
   const afterBridgeState = bridgeStateAt(stroke, afterCenter.s);
   agent.elevation = afterBridgeState.elevation;
-  agent.renderElevation = bridgeVisualElevation(stroke, afterCenter.s, CAR_LENGTH * 0.55);
+  agent.renderElevation = bridgeVisualElevation(stroke, afterCenter.s, CAR_BRIDGE_VISUAL_MARGIN);
   agent.bridgeLayer = afterBridgeState.layer;
   const collisionWalls = bridgeAwareWalls(stroke, walls, afterBridgeState, wallCache);
   const swept = segmentHitsWalls({ x: agent.prevX, y: agent.prevY }, { x: agent.x, y: agent.y }, collisionWalls);
@@ -258,11 +335,13 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
     agent.velocity = 0;
   }
 
-  updateFitness(agent, stroke, dt, prevVelocity, prevSteer, afterCenter, progressBenchmark);
+  updateFitness(agent, stroke, dt, prevVelocity, prevSteer, afterCenter, progressBenchmark, stage, carModel);
 }
 
-function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample = null, progressBenchmark = 0) {
+function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample = null, progressBenchmark = 0, stage = STAGE_LEARNING, carModel = getCarModel(agent.modelId)) {
   const p = centerSample ?? nearestCenterline(stroke, agent.x, agent.y, agent.lastS);
+  const racing = stage === STAGE_RACE;
+  const maxVelocity = 310 * carModel.physics.topSpeed;
   agent.centerIndex = p.index;
   agent.elevation = bridgeStateAt(stroke, p.s).elevation;
   const s = p.s;
@@ -295,16 +374,17 @@ function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample 
     agent.peakProgressSpeed = Math.max(agent.peakProgressSpeed, agent.velocity);
 
     const alignment = Math.max(0, Math.cos(wrapAngle(p.heading - agent.heading)));
-    const speedNorm = clamp(agent.velocity / 310, 0, 1);
+    const speedNorm = clamp(agent.velocity / maxVelocity, 0, 1);
     const centerRatio = clamp(p.dist / (stroke.width * 0.5), 0, 1);
-    const benchmarkScale = progressRewardScale(agent.totalProgress, progressBenchmark, stroke.width);
-    const centerBonus = (1 - centerRatio) * forwardDelta * 1.6;
-    const alignedSpeedBonus = forwardDelta * speedNorm * alignment * 5.5;
-    const clearPathBonus = Math.min(agent.sensors[2], agent.sensors[3], agent.sensors[4]) / SENSOR_RANGE * forwardDelta * 1.4;
-    agent.reward += (forwardDelta * 10 + alignedSpeedBonus + centerBonus + clearPathBonus) * benchmarkScale;
+    const benchmarkScale = racing ? 1 : progressRewardScale(agent.totalProgress, progressBenchmark, stroke.width);
+    const centerBonus = (1 - centerRatio) * forwardDelta * (racing ? 0.9 : 1.6);
+    const alignedSpeedBonus = forwardDelta * speedNorm * alignment * (racing ? 10 : 5.5);
+    const clearPathBonus = Math.min(agent.sensors[2], agent.sensors[3], agent.sensors[4]) / SENSOR_RANGE * forwardDelta * (racing ? 0.7 : 1.4);
+    const progressReward = forwardDelta * (racing ? 5.5 : 10);
+    agent.reward += (progressReward + alignedSpeedBonus + centerBonus + clearPathBonus) * benchmarkScale;
   } else {
     agent.idleTime += dt;
-    agent.reward -= dt * 1.2;
+    agent.reward -= dt * (racing ? 3.5 : 1.2);
   }
 
   const frontDistance = Math.min(agent.sensors[2], agent.sensors[3], agent.sensors[4]) / SENSOR_RANGE;
@@ -312,25 +392,33 @@ function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample 
   if (frontDistance < 0.25 && braking > 0.5) {
     agent.reward += braking * (0.25 - frontDistance) * 0.08;
   }
-  agent.reward -= agent.brake * dt * (2.4 + Math.max(0, frontDistance - 0.25) * 5.5);
+  agent.reward -= agent.brake * dt * (racing ? 4.4 : 2.4 + Math.max(0, frontDistance - 0.25) * 5.5);
 
   const steerJitter = Math.abs(agent.steer - prevSteer);
-  agent.reward -= steerJitter * 0.9;
+  agent.reward -= steerJitter * (racing ? 1.1 : 0.9);
+  if (racing) agent.reward -= dt * 2.5;
 
   agent.lastS = s;
   agent.progress = s;
-  const crashPenalty = agent.crashed ? 1 - clamp(agent.crashSpeed / 310, 0, 1) * 0.55 : 1;
+  const crashPenalty = agent.crashed ? 1 - clamp(agent.crashSpeed / maxVelocity, 0, 1) * 0.55 : 1;
   agent.fitness = Math.max(1, agent.reward * crashPenalty);
   const finishDistance = stroke.closed ? stroke.totalLength * 0.5 : Math.max(0, stroke.totalLength - stroke.width * 0.5);
   const finishedClosedLap = stroke.closed && crossedGate;
   const finishedOpenTrack = !stroke.closed && agent.totalProgress >= finishDistance;
   if (!agent.crashed && (finishedClosedLap || finishedOpenTrack)) {
+    agent.finishTime = agent.age;
     const timeBonus = Math.max(0, 1 - agent.age / 60) * FINISH_REWARD * 0.35;
-    const speedBonus = clamp(agent.peakProgressSpeed / 310, 0, 1) * FINISH_REWARD * 0.2;
+    const speedBonus = clamp(agent.peakProgressSpeed / maxVelocity, 0, 1) * FINISH_REWARD * 0.2;
     agent.finished = true;
     agent.alive = false;
-    agent.reward += FINISH_REWARD + agent.maxProgress * 10 + timeBonus + speedBonus;
-    agent.fitness = agent.reward;
+    if (racing) {
+      const fastFinishScore = (FINISH_REWARD * 120) / Math.max(1, agent.finishTime);
+      agent.reward += FINISH_REWARD * 1.2 + agent.maxProgress * 2 + speedBonus;
+      agent.fitness = FINISH_REWARD * 20 + fastFinishScore + speedBonus + Math.max(0, agent.reward) * 0.05;
+    } else {
+      agent.reward += FINISH_REWARD + agent.maxProgress * 10 + timeBonus + speedBonus;
+      agent.fitness = agent.reward;
+    }
   }
   if (agent.idleTime > 4.5) agent.alive = false;
 }
@@ -375,6 +463,7 @@ function finishGateLine(stroke) {
 
 function progressPercent(agent, stroke) {
   if (!agent || !stroke?.totalLength) return 0;
+  if (agent.finished) return 100;
   if (stroke.closed) {
     const lapProgress = (agent.progress ?? 0) / stroke.totalLength;
     return Math.max(0, Math.min(99.9, lapProgress * 100));
@@ -386,13 +475,44 @@ function bestHistoricalDistance(history) {
   return Math.max(0, ...history.map(g => g.distance ?? 0));
 }
 
+function selectStageLeader(agents, stage) {
+  if (stage === STAGE_RACE) {
+    const fastest = agents
+      .filter(agent => agent.finished && Number.isFinite(agent.finishTime))
+      .sort((a, b) => a.finishTime - b.finishTime)[0];
+    if (fastest) return fastest;
+  }
+  return selectAliveLeader(agents);
+}
+
+function selectGenerationWinner(agents, stage) {
+  if (stage === STAGE_RACE) {
+    const fastest = agents
+      .filter(agent => agent.finished && Number.isFinite(agent.finishTime))
+      .sort((a, b) => a.finishTime - b.finishTime)[0];
+    if (fastest) return fastest;
+  }
+  return agents.reduce((winner, agent) => agent.fitness > winner.fitness ? agent : winner, agents[0]);
+}
+
 function selectAliveLeader(agents) {
   let best = null;
   for (const agent of agents) {
     if (!agent.alive) continue;
     if (!best || agent.fitness > best.fitness) best = agent;
   }
-  return best;
+  return best ?? agents[0] ?? null;
+}
+
+function minFinishTime(agents) {
+  const times = agents
+    .map(agent => agent.finishTime)
+    .filter(time => Number.isFinite(time));
+  return times.length ? Math.min(...times) : null;
+}
+
+function statusForStage(stage) {
+  return stage === STAGE_RACE ? 'RACING' : 'LEARNING';
 }
 
 function castSensors(agent, walls, distances, hits) {

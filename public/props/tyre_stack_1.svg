@@ -20,13 +20,7 @@
         </g>
       </defs>
 
-      <!-- Drop Shadow -->
-      <circle cx="64" cy="85" r="24" fill="rgba(0,0,0,0.35)"/>
-
-      <!-- Stack of 4 Tyres (Bottom to Top) -->
-      <use href="#tyre-single" transform="translate(60, 82)"/>
-      <use href="#tyre-single" transform="translate(60, 71)"/>
-      <use href="#tyre-single" transform="translate(60, 60)"/>
-      <use href="#tyre-single" transform="translate(60, 49)"/>
+      <!-- Single tyre. Shadow is drawn by the canvas renderer. -->
+      <use href="#tyre-single" transform="translate(60, 72)"/>
 
     </svg>

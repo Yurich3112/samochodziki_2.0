@@ -10,10 +10,13 @@
   <div class="app">
     <aside class="panel panel-left">
       <header class="brand">
-        <div class="brand-mark">SC</div>
-        <div class="brand-text">
-          <div class="brand-title"><span class="brand-accent">SAMO</span>chodziki <span class="brand-version">2.0</span></div>
-          <div class="brand-sub">Neuroevolution Racing Simulator</div>
+        <img class="brand-logo" src="./public/Logos/TeamBit_Logo.png" alt="TeamBit logo" />
+        <div class="brand-game">
+          <div class="brand-mark">SC</div>
+          <div class="brand-text">
+            <div class="brand-title"><span class="brand-accent">SAMO</span>chodziki <span class="brand-version">2.0</span></div>
+            <div class="brand-sub">Neuroevolution Racing Simulator</div>
+          </div>
         </div>
       </header>
 
@@ -65,11 +68,12 @@
       <section class="section sim-stats">
         <h3 class="section-title">Generation</h3>
         <div class="big-number" id="generation-count">1</div>
+        <div class="metric-label" id="stage-label">Stage 1: Learn track</div>
         <div class="metric-label">Progress to next generation</div>
         <div class="progress"><div id="generation-progress" style="width:0%"></div></div>
         <div class="metric-row">
-          <span>Best distance</span>
-          <strong><span id="best-distance">0</span> m</strong>
+          <span id="best-metric-label">Best distance</span>
+          <strong><span id="best-distance">0</span><span id="best-distance-unit"> m</span></strong>
         </div>
       </section>
 
@@ -127,16 +131,25 @@
         <div class="metric-row"><span>Time scale</span><strong id="time-scale">1.0x</strong></div>
       </section>
       <section class="telemetry-card">
-        <h3 class="section-title">Distance leaderboard</h3>
+        <h3 class="section-title" id="leaderboard-title">Distance leaderboard</h3>
         <ol class="leaderboard" id="leaderboard"></ol>
       </section>
       <section class="telemetry-card">
-        <h3 class="section-title">Best distance over generations</h3>
+        <h3 class="section-title" id="history-title">Best distance over generations</h3>
         <canvas id="history-canvas" width="240" height="150"></canvas>
       </section>
-      <div class="placeholder">
-        <p class="placeholder-step">Draw a closed track, then switch to Simulate.</p>
-      </div>
+      <section class="telemetry-card car-selector-card">
+        <h3 class="section-title">Car selector</h3>
+        <div class="car-selector">
+          <button class="car-arrow" id="car-prev" aria-label="Previous car">‹</button>
+          <canvas id="car-preview-canvas" width="220" height="210"></canvas>
+          <button class="car-arrow" id="car-next" aria-label="Next car">›</button>
+        </div>
+        <div class="car-selector-name" id="car-selector-name">Sport Prototype</div>
+        <div class="car-selector-desc" id="car-selector-desc">Balanced baseline for learning the track.</div>
+        <div class="car-stat-list" id="car-stat-list"></div>
+        <div class="car-lock-note" id="car-lock-note">Choose a car before starting the simulation.</div>
+      </section>
     </aside>
   </div>
 
