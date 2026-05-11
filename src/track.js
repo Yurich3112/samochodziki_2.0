@@ -125,7 +125,10 @@ export class Track {
         const nearLowerToLower = b.lowerS != null && Math.abs(b.lowerS - ov.lowerS) < dupRadius;
         if (nearUpper || nearLower || nearUpperToLower || nearLowerToLower) {
           isDup = true; 
-          if (!b.overlapSpan || ov.overlapSpan > b.overlapSpan) {
+          // Only upgrade overlapSpan if the existing bridge already uses overlap
+          // geometry. Don't set it on a crossing bridge — that would switch it to
+          // the overlap span formula, producing a much larger zone.
+          if (b.overlapSpan != null && ov.overlapSpan > b.overlapSpan) {
             b.overlapSpan = ov.overlapSpan;
             b.s = ov.upperS;
             b.lowerS = ov.lowerS;
