@@ -156,12 +156,8 @@ export class TrackRenderer {
       }
     }
 
-    // --- bridge deck overlays ---
-    const { bridgeLayers, maxElevation } = collectBridgeLayers(track.strokes);
-    for (let elev = 1; elev <= Math.max(1, maxElevation); elev++) {
-      const bridges = bridgeLayers.get(elev) || [];
-      drawBridgeDeckOverlays(octx, bridges, view);
-    }
+    // NOTE: bridge deck overlays are NOT cached here — they must be drawn
+    // dynamically between car elevation layers so ground-level cars go UNDER them.
 
     // --- start / finish gates ---
     if (view.showTrack ?? true) {
@@ -191,15 +187,8 @@ export class TrackRenderer {
       drawSimulation(ctx, simulation, view, 0);
 
       for (let elev = 1; elev <= Math.max(1, maxElevation, maxCarElevation); elev++) {
-        // Bridge deck overlays are already in the cache, but if cars are on elevated
-        // layers we need the deck painted *before* the car. Since the cache already
-        // has them, we only re-draw a bridge deck if there are cars at this elevation.
-        const hasCarsAtElev = simulation.agents.some(a =>
-          (a.alive || a.crashed) && (a.renderElevation ?? a.elevation) === elev);
-        if (hasCarsAtElev) {
-          const bridges = bridgeLayers.get(elev) || [];
-          drawBridgeDeckOverlays(ctx, bridges, view);
-        }
+        const bridges = bridgeLayers.get(elev) || [];
+        drawBridgeDeckOverlays(ctx, bridges, view);
         drawSimulation(ctx, simulation, view, elev);
       }
 
