@@ -162,7 +162,7 @@ export class Simulation {
       elevation: 0,
       renderElevation: 0,
       sensors: SENSOR_ANGLES.map(() => SENSOR_RANGE),
-      sensorHits: [],
+      sensorHits: Array.from({ length: SENSOR_ANGLES.length }, () => ({ x: 0, y: 0 })),
       age: 0,
     }));
     this.leader = this.agents[0] ?? null;
@@ -346,7 +346,7 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
     agent.renderElevation = bridgeVisualElevation(stroke, afterCenter.s, CAR_BRIDGE_VISUAL_MARGIN);
   }
   agent.bridgeLayer = afterBridgeState.layer;
-  const swept = segmentHitsWalls(agent, stroke, afterBridgeState.elevation, { x: agent.prevX, y: agent.prevY }, { x: agent.x, y: agent.y }, wallCache);
+  const swept = segmentHitsWalls(agent, stroke, afterBridgeState.elevation, agent.prevX, agent.prevY, agent.x, agent.y, wallCache);
   const inside = pointOnRoad(stroke, agent.x, agent.y, agent.lastS);
   if (swept || !inside) {
     agent.alive = false;
@@ -549,7 +549,8 @@ function castSensors(agent, stroke, wallSource, distances, hits) {
     const endY = agent.y + ry;
     
     let best = SENSOR_RANGE;
-    let hitPoint = { x: endX, y: endY };
+    hits[i].x = endX;
+    hits[i].y = endY;
 
     if (useGrid) {
       const walls = wallSource.queryRay(agent.x, agent.y, endX, endY);
@@ -570,7 +571,8 @@ function castSensors(agent, stroke, wallSource, distances, hits) {
         const dist = t * SENSOR_RANGE;
         if (dist < best) {
           best = dist;
-          hitPoint = { x: agent.x + rx * t, y: agent.y + ry * t };
+          hits[i].x = agent.x + rx * t;
+          hits[i].y = agent.y + ry * t;
         }
       }
     } else {
@@ -597,12 +599,12 @@ function castSensors(agent, stroke, wallSource, distances, hits) {
         const dist = t * SENSOR_RANGE;
         if (dist < best) {
           best = dist;
-          hitPoint = { x: agent.x + rx * t, y: agent.y + ry * t };
+          hits[i].x = agent.x + rx * t;
+          hits[i].y = agent.y + ry * t;
         }
       }
     }
     distances[i] = best;
-    hits[i] = hitPoint;
   }
 }
 
@@ -641,6 +643,7 @@ function buildWallSegments(stroke) {
           maxX: Math.max(side[i - 1].x, side[i].x),
           minY: Math.min(side[i - 1].y, side[i].y),
           maxY: Math.max(side[i - 1].y, side[i].y),
+          _gs: 0,
         });
       }
     }
@@ -651,9 +654,11 @@ function buildWallSegments(stroke) {
 
 
 function pointOnRoad(stroke, x, y, referenceS = null) {
-  const p = nearestCenterline(stroke, x, y, referenceS);
-  return p.dist <= stroke.width * 0.46;
+  const dist = nearestCenterline(stroke, x, y, referenceS).dist;
+  return dist <= stroke.width * 0.46;
 }
+
+const _nearestBuf = { dist: 0, score: 0, s: 0, heading: 0, index: 0 };
 
 function nearestCenterline(stroke, x, y, referenceS = null) {
   // Hot path: called 2× per agent per tick. Avoid object allocation in inner loop.
@@ -697,7 +702,12 @@ function nearestCenterline(stroke, x, y, referenceS = null) {
   if (!Number.isFinite(bestDist) && hasRef) {
     return nearestCenterline(stroke, x, y, null);
   }
-  return { dist: bestDist, score: bestScore, s: bestS, heading: bestHeading, index: bestIndex };
+  _nearestBuf.dist = bestDist;
+  _nearestBuf.score = bestScore;
+  _nearestBuf.s = bestS;
+  _nearestBuf.heading = bestHeading;
+  _nearestBuf.index = bestIndex;
+  return _nearestBuf;
 }
 
 function arcDistanceForSearch(stroke, a, b) {
@@ -762,26 +772,26 @@ function lowerBound(values, target) {
   return lo;
 }
 
-function segmentHitsWalls(agent, stroke, myLevel, a, b, wallSource) {
+function segmentHitsWalls(agent, stroke, myLevel, ax, ay, bx, by, wallSource) {
   if (wallSource instanceof WallGrid) {
-    const walls = wallSource.queryRay(a.x, a.y, b.x, b.y);
+    const walls = wallSource.queryRay(ax, ay, bx, by);
     for (let i = 0; i < walls.length; i++) {
       const wall = walls[i];
       if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
-      if (segmentsIntersect(a, b, wall.a, wall.b)) return true;
+      if (segmentsIntersect(ax, ay, bx, by, wall.a.x, wall.a.y, wall.b.x, wall.b.y)) return true;
     }
     return false;
   }
   const box = {
-    minX: Math.min(a.x, b.x),
-    maxX: Math.max(a.x, b.x),
-    minY: Math.min(a.y, b.y),
-    maxY: Math.max(a.y, b.y),
+    minX: Math.min(ax, bx),
+    maxX: Math.max(ax, bx),
+    minY: Math.min(ay, by),
+    maxY: Math.max(ay, by),
   };
   for (const wall of wallSource) {
     if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
     if (!boxesOverlap(box, wall)) continue;
-    if (segmentsIntersect(a, b, wall.a, wall.b)) return true;
+    if (segmentsIntersect(ax, ay, bx, by, wall.a.x, wall.a.y, wall.b.x, wall.b.y)) return true;
   }
   return false;
 }
@@ -804,15 +814,15 @@ function raySegment(a, b, c, d) {
   return { p, dist: Math.hypot(p.x - a.x, p.y - a.y) };
 }
 
-function segmentsIntersect(a, b, c, d) {
-  const rx = b.x - a.x;
-  const ry = b.y - a.y;
-  const sx = d.x - c.x;
-  const sy = d.y - c.y;
+function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const rx = bx - ax;
+  const ry = by - ay;
+  const sx = dx - cx;
+  const sy = dy - cy;
   const denom = rx * sy - ry * sx;
   if (denom === 0) return false;
-  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / denom;
-  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / denom;
+  const t = ((cx - ax) * sy - (cy - ay) * sx) / denom;
+  const u = ((cx - ax) * ry - (cy - ay) * rx) / denom;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 

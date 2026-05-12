@@ -27,12 +27,16 @@ export function bridgeVisualElevation(stroke, s, margin = 0) {
   return surfaceLevelAt(stroke, s, resolvedBridgeLevels(stroke), null, margin);
 }
 
+const _bridgeStateBuf = { layer: 'normal', bridge: null, span: 0, index: -1, elevation: 0 };
+
 export function bridgeStateAt(stroke, s) {
   const bridges = stroke.bridgesOver ?? [];
   const levels = resolvedBridgeLevels(stroke);
   const elevation = surfaceLevelAt(stroke, s, levels);
-  let upperState = null;
-  let lowerState = null;
+  
+  let upperElev = -1, lowerElev = -1;
+  let upperIdx = -1, lowerIdx = -1;
+  let upperSpan = 0, lowerSpan = 0;
 
   for (let i = 0; i < bridges.length; i++) {
     const bridge = bridges[i];
@@ -45,8 +49,10 @@ export function bridgeStateAt(stroke, s) {
       lowerDist = arcDistance(stroke, s, bridge.lowerS);
       if (upperDist <= lowerDist) {
         const bridgeElevation = levels.get(bridge) ?? elevation;
-        if (!upperState || bridgeElevation > upperState.elevation) {
-          upperState = { layer: 'upper', bridge, span, index: i, elevation: bridgeElevation };
+        if (bridgeElevation > upperElev) {
+          upperElev = bridgeElevation;
+          upperIdx = i;
+          upperSpan = span;
         }
         continue;
       }
@@ -54,15 +60,38 @@ export function bridgeStateAt(stroke, s) {
     
     if (lowerDist === -1) lowerDist = arcDistance(stroke, s, bridge.lowerS);
     if (lowerDist <= span && lowerDist < upperDist) {
-      if (!lowerState || elevation > lowerState.elevation) {
-        lowerState = { layer: 'lower', bridge, span, index: i, elevation };
+      if (elevation > lowerElev) {
+        lowerElev = elevation;
+        lowerIdx = i;
+        lowerSpan = span;
       }
     }
   }
 
-  if (upperState) return upperState;
-  if (lowerState) return lowerState;
-  return { layer: 'normal', bridge: null, span: 0, index: -1, elevation };
+  if (upperElev !== -1) {
+    _bridgeStateBuf.layer = 'upper';
+    _bridgeStateBuf.bridge = bridges[upperIdx];
+    _bridgeStateBuf.span = upperSpan;
+    _bridgeStateBuf.index = upperIdx;
+    _bridgeStateBuf.elevation = upperElev;
+    return _bridgeStateBuf;
+  }
+  
+  if (lowerElev !== -1) {
+    _bridgeStateBuf.layer = 'lower';
+    _bridgeStateBuf.bridge = bridges[lowerIdx];
+    _bridgeStateBuf.span = lowerSpan;
+    _bridgeStateBuf.index = lowerIdx;
+    _bridgeStateBuf.elevation = lowerElev;
+    return _bridgeStateBuf;
+  }
+  
+  _bridgeStateBuf.layer = 'normal';
+  _bridgeStateBuf.bridge = null;
+  _bridgeStateBuf.span = 0;
+  _bridgeStateBuf.index = -1;
+  _bridgeStateBuf.elevation = elevation;
+  return _bridgeStateBuf;
 }
 
 export function bridgeDeckElevation(stroke, bridge) {
