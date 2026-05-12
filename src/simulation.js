@@ -162,7 +162,10 @@ export class Simulation {
       elevation: 0,
       renderElevation: 0,
       sensors: SENSOR_ANGLES.map(() => SENSOR_RANGE),
-      sensorHits: Array.from({ length: SENSOR_ANGLES.length }, () => ({ x: 0, y: 0 })),
+      sensorHits: SENSOR_ANGLES.map(rel => ({
+        x: start.x + Math.cos(heading + rel) * SENSOR_RANGE,
+        y: start.y + Math.sin(heading + rel) * SENSOR_RANGE,
+      })),
       age: 0,
     }));
     this.leader = this.agents[0] ?? null;
