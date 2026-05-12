@@ -11,6 +11,18 @@ export function bridgeZoneSpan(stroke, bridge) {
   return bridgeSpanFor(stroke.width, bridge.otherWidth ?? stroke.width, bridge.angleSin) + stroke.width * 0.85;
 }
 
+// Hot-path optimisation: cache computed spans so the same bridge+stroke pair
+// doesn't recompute trigonometry hundreds of times per frame.
+const _spanCache = new WeakMap();  // stroke → Map<bridge, span>
+
+function cachedBridgeZoneSpan(stroke, bridge) {
+  let map = _spanCache.get(stroke);
+  if (!map) { map = new Map(); _spanCache.set(stroke, map); }
+  let v = map.get(bridge);
+  if (v === undefined) { v = bridgeZoneSpan(stroke, bridge); map.set(bridge, v); }
+  return v;
+}
+
 const bridgeLevelCache = new WeakMap();
 
 export function bridgeElevation(stroke, s) {
@@ -31,7 +43,7 @@ export function bridgeStateAt(stroke, s) {
   for (let i = 0; i < bridges.length; i++) {
     const bridge = bridges[i];
     if (!bridge.self || bridge.lowerS == null) continue;
-    const span = bridgeZoneSpan(stroke, bridge);
+    const span = cachedBridgeZoneSpan(stroke, bridge);
     if (isUpperBridgeZone(stroke, bridge, s, span)) {
       const bridgeElevation = levels.get(bridge) ?? elevation;
       if (!upperState || bridgeElevation > upperState.elevation) {
@@ -80,7 +92,7 @@ function bridgeUnderCount(stroke, bridge) {
   let count = 0;
   for (const other of stroke.bridgesOver ?? []) {
     if (other === bridge || !other.self || other.lowerS == null) continue;
-    const span = bridgeZoneSpan(stroke, other);
+    const span = cachedBridgeZoneSpan(stroke, other);
     if (arcDistance(stroke, bridge.s, other.lowerS) <= span) {
       count += 1;
     }
@@ -118,11 +130,11 @@ function resolvedBridgeLevels(stroke) {
 function bridgeSupportLevel(stroke, bridge, levels) {
   let level = surfaceLevelAt(stroke, bridge.lowerS, levels, bridge);
   const contactMargin = stroke.width * 0.45;
-  const lowerSpan = bridgeZoneSpan(stroke, bridge) + contactMargin;
+  const lowerSpan = cachedBridgeZoneSpan(stroke, bridge) + contactMargin;
 
   for (const other of stroke.bridgesOver ?? []) {
     if (other === bridge || !other.self || other.lowerS == null) continue;
-    const span = bridgeZoneSpan(stroke, other) + contactMargin;
+    const span = cachedBridgeZoneSpan(stroke, other) + contactMargin;
     // If this bridge's lower pass sits on another bridge deck, it must be one
     // level above that deck, not merely one level above ground.
     if (arcDistance(stroke, bridge.lowerS, other.s) <= lowerSpan + span) {
@@ -133,7 +145,7 @@ function bridgeSupportLevel(stroke, bridge, levels) {
     // overlap or are nearly contiguous on the road, one must be raised above
     // the other so they don't visually merge at the same level.
     const upperGap = arcDistance(stroke, bridge.s, other.s);
-    const upperOverlapThreshold = bridgeZoneSpan(stroke, bridge) + bridgeZoneSpan(stroke, other) + stroke.width * 0.5;
+    const upperOverlapThreshold = cachedBridgeZoneSpan(stroke, bridge) + cachedBridgeZoneSpan(stroke, other) + stroke.width * 0.5;
     if (upperGap < upperOverlapThreshold) {
       // The bridge whose upper-s comes later on the road goes on top.
       // For closed tracks, compare by which direction is "forward".
@@ -151,7 +163,7 @@ function surfaceLevelAt(stroke, s, levels, ignoreBridge = null, margin = 0) {
   let level = 0;
   for (const bridge of stroke.bridgesOver ?? []) {
     if (bridge === ignoreBridge || !bridge.self || bridge.lowerS == null) continue;
-    const span = bridgeZoneSpan(stroke, bridge);
+    const span = cachedBridgeZoneSpan(stroke, bridge);
     if (isUpperBridgeZone(stroke, bridge, s, span + margin)) {
       level = Math.max(level, levels.get(bridge) ?? 1);
     }

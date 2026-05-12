@@ -46,6 +46,17 @@ export class TrackRenderer {
     this._trackCacheStamp = null;  // Track content fingerprint
     this._trackCacheView = null;   // Serialised view toggles
 
+    // Per-elevation off-screen caches for bridge deck overlays.
+    // Bridge decks are expensive (arc sampling, shadow, curbs, asphalt) but
+    // static — they only change when the track changes.  By caching them we
+    // avoid hundreds of sampleAt + strokePath calls every frame.
+    this._bridgeCaches = new Map();   // elevation → HTMLCanvasElement
+    this._bridgeCacheStamp = null;
+    this._bridgeCacheView = null;
+    this._cachedBridgeLayers = null;  // cached collectBridgeLayers result
+    this._cachedBridgeStamp = null;
+    this._cachedMaxElevation = 0;
+
     // Load props
     this.loadedProps = {};
     this.treeProps = [];
@@ -78,12 +89,75 @@ export class TrackRenderer {
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this._grass = makeGrassPattern(this.ctx);
     this._trackCacheStamp = null; // Canvas size changed, force rebuild.
+    this._bridgeCacheStamp = null;
   }
 
   /** Fingerprint that changes when strokes are added/removed or props regenerated. */
   _trackStamp(track) {
     // Fast — no serialisation, just IDs + count.
     return track.strokes.map(s => s.id).join(',') + '|' + (track.props?.length ?? 0);
+  }
+
+  /** Cached collectBridgeLayers — only rebuilt when the track stamp changes. */
+  _getBridgeLayers(track) {
+    const stamp = this._trackStamp(track);
+    if (this._cachedBridgeStamp === stamp && this._cachedBridgeLayers) {
+      return { bridgeLayers: this._cachedBridgeLayers, maxElevation: this._cachedMaxElevation };
+    }
+    const result = collectBridgeLayers(track.strokes);
+    this._cachedBridgeLayers = result.bridgeLayers;
+    this._cachedMaxElevation = result.maxElevation;
+    this._cachedBridgeStamp = stamp;
+    return result;
+  }
+
+  /**
+   * Build (or reuse) per-elevation off-screen canvases with pre-rendered bridge
+   * deck overlays.  Returns a Map<elevation, HTMLCanvasElement>.
+   */
+  _ensureBridgeCaches(track, view) {
+    const stamp = this._trackStamp(track);
+    const viewKey = this._viewKey(view);
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+
+    if (
+      this._bridgeCacheStamp === stamp &&
+      this._bridgeCacheView === viewKey &&
+      this._bridgeCaches.size > 0
+    ) {
+      // Verify canvas sizes haven't changed.
+      let sizeOk = true;
+      for (const c of this._bridgeCaches.values()) {
+        if (c.width !== cw || c.height !== ch) { sizeOk = false; break; }
+      }
+      if (sizeOk) return this._bridgeCaches;
+    }
+
+    const { bridgeLayers, maxElevation } = this._getBridgeLayers(track);
+
+    // Clear old caches.
+    this._bridgeCaches.clear();
+
+    for (let elev = 1; elev <= Math.max(1, maxElevation); elev++) {
+      const bridges = bridgeLayers.get(elev);
+      if (!bridges || bridges.length === 0) continue;
+
+      let offCanvas = document.createElement('canvas');
+      offCanvas.width = cw;
+      offCanvas.height = ch;
+      const octx = offCanvas.getContext('2d');
+      octx.clearRect(0, 0, cw, ch);
+      octx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+      drawBridgeDeckOverlays(octx, bridges, view);
+
+      this._bridgeCaches.set(elev, offCanvas);
+    }
+
+    this._bridgeCacheStamp = stamp;
+    this._bridgeCacheView = viewKey;
+    return this._bridgeCaches;
   }
 
   /** Serialised view toggles that affect the cached static layer. */
@@ -181,14 +255,21 @@ export class TrackRenderer {
       ctx.drawImage(cache, 0, 0);
       ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-      const { bridgeLayers, maxElevation } = collectBridgeLayers(track.strokes);
+      // Bridge deck overlays are cached on per-elevation off-screen canvases.
+      // We blit them between car elevation layers so ground-level cars go UNDER.
+      const bridgeCaches = this._ensureBridgeCaches(track, view);
+      const { maxElevation } = this._getBridgeLayers(track);
       const maxCarElevation = Math.max(0, ...simulation.agents.map(a => a.renderElevation ?? a.elevation ?? 0));
 
       drawSimulation(ctx, simulation, view, 0);
 
       for (let elev = 1; elev <= Math.max(1, maxElevation, maxCarElevation); elev++) {
-        const bridges = bridgeLayers.get(elev) || [];
-        drawBridgeDeckOverlays(ctx, bridges, view);
+        const bridgeCanvas = bridgeCaches.get(elev);
+        if (bridgeCanvas) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(bridgeCanvas, 0, 0);
+          ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        }
         drawSimulation(ctx, simulation, view, elev);
       }
 
@@ -198,6 +279,7 @@ export class TrackRenderer {
     // ── Full path (editor mode / no simulation) ──
     // Invalidate the cache when in editor mode so the next sim frame rebuilds it.
     this._trackCacheStamp = null;
+    this._bridgeCacheStamp = null;
 
     // --- background grass ---
     ctx.fillStyle = this._grass || '#48622a';
@@ -741,28 +823,30 @@ function drawBridgeShadow(ctx, stroke, bridge, width, curbW) {
   if (shadowSamples.length < 2) return;
 
   // Draw a single wide shadow band under the bridge deck.
-  // Uses 'darken' so overlapping bridge shadows don't accumulate.
+  // Uses regular source-over so it works correctly when pre-rendered on a
+  // transparent off-screen canvas.  The semi-transparent black strokes
+  // preserve their alpha in the cache and correctly darken the underlying
+  // content when the cache is composited onto the main canvas.
   const centerPath = shadowSamples.map(s => s.p);
 
   ctx.save();
-  ctx.globalCompositeOperation = 'darken';
   ctx.lineCap = 'butt';
   ctx.lineJoin = 'round';
 
   // Outer soft penumbra
   ctx.translate(5, 8);
   ctx.lineWidth = width + curbW * 2.4;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.06)';
   strokePath(ctx, centerPath);
 
   // Mid shadow
   ctx.lineWidth = width + curbW * 1.6;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.09)';
   strokePath(ctx, centerPath);
 
   // Core shadow
   ctx.lineWidth = width + curbW * 0.6;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
   strokePath(ctx, centerPath);
 
   ctx.restore();

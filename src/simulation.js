@@ -350,15 +350,15 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
     agent.velocity = 0;
   }
 
-  updateFitness(agent, stroke, dt, prevVelocity, prevSteer, afterCenter, progressBenchmark, stage, carModel);
+  updateFitness(agent, stroke, dt, prevVelocity, prevSteer, afterCenter, afterBridgeState.elevation, progressBenchmark, stage, carModel);
 }
 
-function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample = null, progressBenchmark = 0, stage = STAGE_LEARNING, carModel = getCarModel(agent.modelId)) {
+function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample = null, precomputedElevation = null, progressBenchmark = 0, stage = STAGE_LEARNING, carModel = getCarModel(agent.modelId)) {
   const p = centerSample ?? nearestCenterline(stroke, agent.x, agent.y, agent.lastS);
   const racing = stage === STAGE_RACE;
   const maxVelocity = 310 * carModel.physics.topSpeed;
   agent.centerIndex = p.index;
-  agent.elevation = bridgeStateAt(stroke, p.s).elevation;
+  agent.elevation = precomputedElevation ?? bridgeStateAt(stroke, p.s).elevation;
   const s = p.s;
   const prevS = agent.lastS;
   let delta = s - agent.lastS;
@@ -530,28 +530,43 @@ function statusForStage(stage) {
   return stage === STAGE_RACE ? 'RACING' : 'LEARNING';
 }
 
-function castSensors(agent, walls, distances, hits) {
+function castSensors(agent, wallSource, distances, hits) {
+  // wallSource can be a WallGrid (spatial index) or a plain array (fallback).
+  const useGrid = wallSource instanceof WallGrid;
   for (let i = 0; i < SENSOR_ANGLES.length; i++) {
     const rel = SENSOR_ANGLES[i];
     const angle = agent.heading + rel;
-    const end = {
-      x: agent.x + Math.cos(angle) * SENSOR_RANGE,
-      y: agent.y + Math.sin(angle) * SENSOR_RANGE,
-    };
-    const rayBox = {
-      minX: Math.min(agent.x, end.x),
-      maxX: Math.max(agent.x, end.x),
-      minY: Math.min(agent.y, end.y),
-      maxY: Math.max(agent.y, end.y),
-    };
+    const endX = agent.x + Math.cos(angle) * SENSOR_RANGE;
+    const endY = agent.y + Math.sin(angle) * SENSOR_RANGE;
+    const end = { x: endX, y: endY };
     let best = SENSOR_RANGE;
     let hitPoint = end;
-    for (const wall of walls) {
-      if (!boxesOverlap(rayBox, wall)) continue;
-      const hit = raySegment(agent, end, wall.a, wall.b);
-      if (hit && hit.dist < best) {
-        best = hit.dist;
-        hitPoint = hit.p;
+
+    if (useGrid) {
+      // Spatial grid query — only check walls in cells the ray passes through.
+      const walls = wallSource.queryRay(agent.x, agent.y, endX, endY);
+      for (let w = 0; w < walls.length; w++) {
+        const wall = walls[w];
+        const hit = raySegment(agent, end, wall.a, wall.b);
+        if (hit && hit.dist < best) {
+          best = hit.dist;
+          hitPoint = hit.p;
+        }
+      }
+    } else {
+      const rayBox = {
+        minX: Math.min(agent.x, endX),
+        maxX: Math.max(agent.x, endX),
+        minY: Math.min(agent.y, endY),
+        maxY: Math.max(agent.y, endY),
+      };
+      for (const wall of wallSource) {
+        if (!boxesOverlap(rayBox, wall)) continue;
+        const hit = raySegment(agent, end, wall.a, wall.b);
+        if (hit && hit.dist < best) {
+          best = hit.dist;
+          hitPoint = hit.p;
+        }
       }
     }
     distances[i] = best;
@@ -603,11 +618,12 @@ function buildWallSegments(stroke) {
 function buildWallCache(stroke, walls) {
   // Pre-compute wall elevation levels for fast lookup
   const wallLevels = walls.map(w => bridgeElevation(stroke, w.sMid));
-  // Cache: for each elevation level, only walls on that same level
+  // Build per-elevation spatial grids for O(1)-ish sensor queries.
   const cache = new Map();
   const levels = new Set(wallLevels);
   for (const lvl of levels) {
-    cache.set(lvl, walls.filter((_, i) => wallLevels[i] === lvl));
+    const lvlWalls = walls.filter((_, i) => wallLevels[i] === lvl);
+    cache.set(lvl, new WallGrid(lvlWalls));
   }
   return cache;
 }
@@ -616,8 +632,9 @@ function bridgeAwareWalls(stroke, walls, state, cache = null) {
   const myLevel = state.elevation ?? 0;
   const cached = cache?.get(myLevel);
   if (cached) return cached;
-  // Fallback: filter walls to only those on the same elevation
-  return walls.filter(w => bridgeElevation(stroke, w.sMid) === myLevel);
+  // Fallback: build a grid on-the-fly from filtered walls.
+  const filtered = walls.filter(w => bridgeElevation(stroke, w.sMid) === myLevel);
+  return new WallGrid(filtered);
 }
 
 function pointOnRoad(stroke, x, y, referenceS = null) {
@@ -716,14 +733,21 @@ function lowerBound(values, target) {
   return lo;
 }
 
-function segmentHitsWalls(a, b, walls) {
+function segmentHitsWalls(a, b, wallSource) {
+  if (wallSource instanceof WallGrid) {
+    const walls = wallSource.queryRay(a.x, a.y, b.x, b.y);
+    for (let i = 0; i < walls.length; i++) {
+      if (segmentsIntersect(a, b, walls[i].a, walls[i].b)) return true;
+    }
+    return false;
+  }
   const box = {
     minX: Math.min(a.x, b.x),
     maxX: Math.max(a.x, b.x),
     minY: Math.min(a.y, b.y),
     maxY: Math.max(a.y, b.y),
   };
-  for (const wall of walls) {
+  for (const wall of wallSource) {
     if (!boxesOverlap(box, wall)) continue;
     if (segmentsIntersect(a, b, wall.a, wall.b)) return true;
   }
@@ -788,4 +812,102 @@ function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
+}
+
+// ─── Spatial grid for wall segments ──────────────────────────────────
+//
+// Partitions wall segments into a uniform grid so sensor raycasts and
+// swept collision tests only check walls in cells the ray traverses.
+// Reduces sensor casting from O(N walls) to O(cells × density).
+
+class WallGrid {
+  constructor(walls) {
+    this.walls = walls;
+    if (walls.length === 0) {
+      this.cells = null;
+      this.cols = 0;
+      this.rows = 0;
+      return;
+    }
+
+    // Determine bounds of all walls.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const w of walls) {
+      if (w.minX < minX) minX = w.minX;
+      if (w.maxX > maxX) maxX = w.maxX;
+      if (w.minY < minY) minY = w.minY;
+      if (w.maxY > maxY) maxY = w.maxY;
+    }
+
+    // Cell size ≈ SENSOR_RANGE so most rays cross only a few cells.
+    const cellSize = Math.max(80, SENSOR_RANGE * 0.85);
+    this.ox = minX - cellSize;
+    this.oy = minY - cellSize;
+    this.cellSize = cellSize;
+    this.cols = Math.ceil((maxX - this.ox + cellSize) / cellSize) + 1;
+    this.rows = Math.ceil((maxY - this.oy + cellSize) / cellSize) + 1;
+    this.cells = new Array(this.cols * this.rows);
+    for (let i = 0; i < this.cells.length; i++) this.cells[i] = null;
+
+    // Insert each wall into every cell it overlaps.
+    for (const w of walls) {
+      const c0 = Math.max(0, ((w.minX - this.ox) / cellSize) | 0);
+      const c1 = Math.min(this.cols - 1, ((w.maxX - this.ox) / cellSize) | 0);
+      const r0 = Math.max(0, ((w.minY - this.oy) / cellSize) | 0);
+      const r1 = Math.min(this.rows - 1, ((w.maxY - this.oy) / cellSize) | 0);
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const idx = r * this.cols + c;
+          if (!this.cells[idx]) this.cells[idx] = [];
+          this.cells[idx].push(w);
+        }
+      }
+    }
+
+    // Dedup stamp — used to avoid returning the same wall twice across cells.
+    this._stamp = 0;
+    // Reusable result buffer for queryRay — avoids allocating a new array each call.
+    this._queryBuf = [];
+  }
+
+  /**
+   * Return all wall segments in cells that the axis-aligned bounding box
+   * of the ray from (x0,y0) to (x1,y1) overlaps.  Uses a simple AABB
+   * cell walk which is cheap and sufficient for short sensor rays.
+   *
+   * IMPORTANT: the returned array is reused across calls — callers must
+   * consume or copy it before the next queryRay call on this grid.
+   */
+  queryRay(x0, y0, x1, y1) {
+    if (!this.cells) return this.walls; // fallback for empty grids
+    const stamp = ++this._stamp;
+    const cs = this.cellSize;
+    const ox = this.ox, oy = this.oy;
+
+    const rMinX = Math.min(x0, x1);
+    const rMaxX = Math.max(x0, x1);
+    const rMinY = Math.min(y0, y1);
+    const rMaxY = Math.max(y0, y1);
+    const c0 = Math.max(0, ((rMinX - ox) / cs) | 0);
+    const c1 = Math.min(this.cols - 1, ((rMaxX - ox) / cs) | 0);
+    const r0 = Math.max(0, ((rMinY - oy) / cs) | 0);
+    const r1 = Math.min(this.rows - 1, ((rMaxY - oy) / cs) | 0);
+
+    // Reuse a shared buffer to avoid allocating a new array every call.
+    const result = this._queryBuf;
+    result.length = 0;
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const bucket = this.cells[r * this.cols + c];
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const w = bucket[i];
+          if (w._gs === stamp) continue; // already added
+          w._gs = stamp;
+          result.push(w);
+        }
+      }
+    }
+    return result;
+  }
 }

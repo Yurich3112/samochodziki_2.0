@@ -1,10 +1,128 @@
+// ─── Cached car sprite rendering ─────────────────────────────────────
+//
+// Each unique (modelId, color) pair is pre-rendered to an off-screen canvas
+// in the "no brakes" state.  On each frame, the cached sprite is blitted with
+// a single drawImage + rotation.  For braking cars, the brake-light overlay
+// is drawn on top (only ~3-5 extra canvas calls instead of 30-50).
+//
+// This replaces ~900 procedural canvas calls per frame (30 cars × ~30 ops)
+// with ~30 drawImage calls + occasional brake overlays.
+
+const _spriteCache = new Map(); // key: `${modelId}|${color}|${scale}` → { canvas, w, h, ox, oy }
+
+function _getSpriteKey(modelId, color, scale) {
+  return `${modelId}|${color}|${scale}`;
+}
+
+function _ensureSprite(modelId, color, scale) {
+  const key = _getSpriteKey(modelId, color, scale);
+  let entry = _spriteCache.get(key);
+  if (entry) return entry;
+
+  // Determine the canvas size needed for this car model.
+  // All models draw in a ~100×200 local space; hypercar uses 400×800 at 0.25x.
+  const isHypercar = modelId === 'hypercar';
+  const localW = isHypercar ? 400 : 100;
+  const localH = isHypercar ? 800 : 200;
+  const localScale = isHypercar ? scale * 0.25 : scale;
+  // Add padding for shadows / overhangs.
+  const pad = 6;
+  const w = Math.ceil(localW * localScale) + pad * 2;
+  const h = Math.ceil(localH * localScale) + pad * 2;
+
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width = w;
+  offCanvas.height = h;
+  const octx = offCanvas.getContext('2d');
+
+  // Draw the car centered in the off-screen canvas.
+  const fakeCar = {
+    x: w / 2,
+    y: h / 2,
+    heading: -Math.PI / 2,  // draw pointing "up" so rotation in blit is straightforward
+    color,
+    modelId,
+    brake: 0,  // cached sprite has no brake lights
+  };
+  _drawCarProcedural(octx, fakeCar, scale);
+
+  entry = { canvas: offCanvas, w, h };
+  _spriteCache.set(key, entry);
+  return entry;
+}
+
 export function drawCar(ctx, car, scale = 0.28) {
+  const modelId = car.modelId ?? car.model?.id ?? 'sport';
+  const color = car.color ?? '#ef4444';
+  const brake = car.brake ?? 0;
+
+  const sprite = _ensureSprite(modelId, color, scale);
+
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(car.heading + Math.PI / 2);  // align to travel direction
+
+  // Blit the pre-rendered sprite centered at origin.
+  ctx.drawImage(sprite.canvas, -sprite.w / 2, -sprite.h / 2);
+
+  // Overlay brake lights if braking (cheap — only a few draw calls).
+  if (brake > 0.18) {
+    ctx.scale(scale, scale);
+    if (modelId === 'hypercar') {
+      ctx.scale(0.25, 0.25);
+      ctx.translate(-200, -400);
+    } else {
+      ctx.translate(-50, -100);
+    }
+    _drawBrakeLightsForModel(ctx, modelId, brake);
+  }
+
+  ctx.restore();
+}
+
+/** Full procedural car draw — used to populate the sprite cache. */
+function _drawCarProcedural(ctx, car, scale = 0.28) {
   const modelId = car.modelId ?? car.model?.id ?? 'sport';
   if (modelId === 'f1') return drawF1Car(ctx, car, scale);
   if (modelId === 'gt') return drawGtCar(ctx, car, scale);
   if (modelId === 'hypercar') return drawHypercar(ctx, car, scale);
   if (modelId === 'rally') return drawRallyCar(ctx, car, scale);
   return drawSportCar(ctx, car, scale);
+}
+
+/** Just the brake lights for a given model — called as an overlay for braking cars. */
+function _drawBrakeLightsForModel(ctx, modelId, brake) {
+  const b = clamp(brake, 0, 1);
+  if (modelId === 'f1') {
+    drawBrakeLights(ctx, b, [
+      { x: 29, y: 177, w: 12, h: 4 },
+      { x: 59, y: 177, w: 12, h: 4 },
+      { x: 47, y: 184, w: 6, h: 4 },
+    ]);
+  } else if (modelId === 'gt') {
+    drawBrakeLights(ctx, b, [
+      { x: 22, y: 176, w: 14, h: 5 },
+      { x: 64, y: 176, w: 14, h: 5 },
+    ]);
+  } else if (modelId === 'hypercar') {
+    drawBrakeLights(ctx, b, [
+      { x: 80, y: 720, w: 48, h: 8 },
+      { x: 272, y: 720, w: 48, h: 8 },
+      { x: 196, y: 740, w: 8, h: 8 },
+    ]);
+  } else if (modelId === 'rally') {
+    drawBrakeLights(ctx, b, [
+      { x: 23, y: 176, w: 14, h: 5 },
+      { x: 63, y: 176, w: 14, h: 5 },
+      { x: 47, y: 184, w: 6, h: 4 },
+    ]);
+  } else {
+    // sport
+    drawBrakeLights(ctx, b, [
+      { x: 27, y: 176, w: 12, h: 5 },
+      { x: 61, y: 176, w: 12, h: 5 },
+    ]);
+  }
 }
 
 function drawSportCar(ctx, car, scale = 0.28) {
