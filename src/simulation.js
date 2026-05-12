@@ -1,5 +1,5 @@
 import { GeneticAlgorithm } from './brain.js';
-import { bridgeElevation, bridgeStateAt, bridgeVisualElevation } from './bridges.js';
+import { bridgeElevation, bridgeStateAt, bridgeVisualElevation, arcDistance } from './bridges.js';
 import { getCarModel } from './carModels.js';
 
 const SENSOR_ANGLES = [-0.9, -0.55, -0.25, 0, 0.25, 0.55, 0.9, Math.PI];
@@ -56,7 +56,7 @@ export class Simulation {
       }
       this.trackStroke = selected;
       this.wallSegments = buildWallSegments(this.trackStroke);
-      this.wallCache = buildWallCache(this.trackStroke, this.wallSegments);
+      this.wallCache = new WallGrid(this.wallSegments);
       this.spawnGeneration();
     }
     if (!this.running) this.status = 'READY';
@@ -115,7 +115,7 @@ export class Simulation {
     if (!this.trackStroke) this.trackStroke = selectTrackStroke(this.track);
     if (!this.trackStroke) return;
     this.wallSegments = buildWallSegments(this.trackStroke);
-    this.wallCache = buildWallCache(this.trackStroke, this.wallSegments);
+    this.wallCache = new WallGrid(this.wallSegments);
     this.generationTime = 0;
     this.progressBenchmark = bestHistoricalDistance(this.generationHistory);
     this.skidMarks = this.skidMarks.slice(-250);
@@ -171,12 +171,17 @@ export class Simulation {
     const step = Math.min(dt, 1 / 30);
     this.generationTime += step;
 
+    if (this.timeScale > 1 && this.skidMarks.length > 0) {
+      this.skidMarks = [];
+    }
+
     let firstFinisher = null;
     let anyAlive = false;
+    const activeSkids = this.timeScale === 1 ? this.skidMarks : null;
     for (const agent of this.agents) {
       if (!agent.alive) continue;
       anyAlive = true;
-      updateAgent(agent, this.trackStroke, this.wallSegments, this.wallCache, step, this.skidMarks, this.progressBenchmark, this.stage, isLastTick);
+      updateAgent(agent, this.trackStroke, this.wallSegments, this.wallCache, step, activeSkids, this.progressBenchmark, this.stage, isLastTick);
       if (agent.finished && !firstFinisher) {
         firstFinisher = agent;
       }
@@ -284,8 +289,7 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
   agent.centerIndex = center.index;
   const bridgeState = bridgeStateAt(stroke, center.s);
   agent.elevation = bridgeState.elevation;
-  const activeWalls = bridgeAwareWalls(stroke, walls, bridgeState, wallCache);
-  castSensors(agent, activeWalls, agent.sensors, agent.sensorHits);
+  castSensors(agent, stroke, wallCache, agent.sensors, agent.sensorHits);
   const angleToRoad = wrapAngle(center.heading - agent.heading) / Math.PI;
 
   // Fill pre-allocated input buffer instead of allocating a new array.
@@ -340,8 +344,7 @@ function updateAgent(agent, stroke, walls, wallCache, dt, skidMarks, progressBen
     agent.renderElevation = bridgeVisualElevation(stroke, afterCenter.s, CAR_BRIDGE_VISUAL_MARGIN);
   }
   agent.bridgeLayer = afterBridgeState.layer;
-  const collisionWalls = bridgeAwareWalls(stroke, walls, afterBridgeState, wallCache);
-  const swept = segmentHitsWalls({ x: agent.prevX, y: agent.prevY }, { x: agent.x, y: agent.y }, collisionWalls);
+  const swept = segmentHitsWalls(agent, stroke, afterBridgeState.elevation, { x: agent.prevX, y: agent.prevY }, { x: agent.x, y: agent.y }, wallCache);
   const inside = pointOnRoad(stroke, agent.x, agent.y, agent.lastS);
   if (swept || !inside) {
     agent.alive = false;
@@ -376,14 +379,16 @@ function updateFitness(agent, stroke, dt, prevVelocity, prevSteer, centerSample 
     }
   }
 
+  agent.totalProgress += delta;
+  agent.maxProgress = Math.max(agent.maxProgress, agent.totalProgress);
+
   const forwardDelta = Math.max(0, delta);
   const crossedGate = stroke.closed && crossedFinishGate(agent, stroke, prevS, s);
+  
   if (forwardDelta > 1.5) {
     agent.idleTime = 0;
-    agent.totalProgress += forwardDelta;
     if (crossedForward || crossedGate) agent.lap += 1;
     agent.bestS = s;
-    agent.maxProgress = Math.max(agent.maxProgress, agent.totalProgress);
     agent.speedScore += Math.max(0, agent.velocity);
     agent.speedSamples += 1;
     agent.peakProgressSpeed = Math.max(agent.peakProgressSpeed, agent.velocity);
@@ -530,8 +535,9 @@ function statusForStage(stage) {
   return stage === STAGE_RACE ? 'RACING' : 'LEARNING';
 }
 
-function castSensors(agent, wallSource, distances, hits) {
+function castSensors(agent, stroke, wallSource, distances, hits) {
   // wallSource can be a WallGrid (spatial index) or a plain array (fallback).
+  const myLevel = agent.elevation;
   const useGrid = wallSource instanceof WallGrid;
   for (let i = 0; i < SENSOR_ANGLES.length; i++) {
     const rel = SENSOR_ANGLES[i];
@@ -547,6 +553,7 @@ function castSensors(agent, wallSource, distances, hits) {
       const walls = wallSource.queryRay(agent.x, agent.y, endX, endY);
       for (let w = 0; w < walls.length; w++) {
         const wall = walls[w];
+        if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
         const hit = raySegment(agent, end, wall.a, wall.b);
         if (hit && hit.dist < best) {
           best = hit.dist;
@@ -561,6 +568,7 @@ function castSensors(agent, wallSource, distances, hits) {
         maxY: Math.max(agent.y, endY),
       };
       for (const wall of wallSource) {
+        if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
         if (!boxesOverlap(rayBox, wall)) continue;
         const hit = raySegment(agent, end, wall.a, wall.b);
         if (hit && hit.dist < best) {
@@ -604,6 +612,7 @@ function buildWallSegments(stroke) {
           a: side[i - 1],
           b: side[i],
           sMid,
+          elev: wallElev,
           minX: Math.min(side[i - 1].x, side[i].x),
           maxX: Math.max(side[i - 1].x, side[i].x),
           minY: Math.min(side[i - 1].y, side[i].y),
@@ -615,27 +624,7 @@ function buildWallSegments(stroke) {
   return out;
 }
 
-function buildWallCache(stroke, walls) {
-  // Pre-compute wall elevation levels for fast lookup
-  const wallLevels = walls.map(w => bridgeElevation(stroke, w.sMid));
-  // Build per-elevation spatial grids for O(1)-ish sensor queries.
-  const cache = new Map();
-  const levels = new Set(wallLevels);
-  for (const lvl of levels) {
-    const lvlWalls = walls.filter((_, i) => wallLevels[i] === lvl);
-    cache.set(lvl, new WallGrid(lvlWalls));
-  }
-  return cache;
-}
 
-function bridgeAwareWalls(stroke, walls, state, cache = null) {
-  const myLevel = state.elevation ?? 0;
-  const cached = cache?.get(myLevel);
-  if (cached) return cached;
-  // Fallback: build a grid on-the-fly from filtered walls.
-  const filtered = walls.filter(w => bridgeElevation(stroke, w.sMid) === myLevel);
-  return new WallGrid(filtered);
-}
 
 function pointOnRoad(stroke, x, y, referenceS = null) {
   const p = nearestCenterline(stroke, x, y, referenceS);
@@ -733,11 +722,13 @@ function lowerBound(values, target) {
   return lo;
 }
 
-function segmentHitsWalls(a, b, wallSource) {
+function segmentHitsWalls(agent, stroke, myLevel, a, b, wallSource) {
   if (wallSource instanceof WallGrid) {
     const walls = wallSource.queryRay(a.x, a.y, b.x, b.y);
     for (let i = 0; i < walls.length; i++) {
-      if (segmentsIntersect(a, b, walls[i].a, walls[i].b)) return true;
+      const wall = walls[i];
+      if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
+      if (segmentsIntersect(a, b, wall.a, wall.b)) return true;
     }
     return false;
   }
@@ -748,6 +739,7 @@ function segmentHitsWalls(a, b, wallSource) {
     maxY: Math.max(a.y, b.y),
   };
   for (const wall of wallSource) {
+    if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
     if (!boxesOverlap(box, wall)) continue;
     if (segmentsIntersect(a, b, wall.a, wall.b)) return true;
   }
@@ -775,6 +767,7 @@ function segmentsIntersect(a, b, c, d) {
 }
 
 function addSkid(agent, skidMarks, drift) {
+  if (!skidMarks) return;
   const side = { x: Math.cos(agent.heading + Math.PI / 2), y: Math.sin(agent.heading + Math.PI / 2) };
   const back = { x: Math.cos(agent.heading + Math.PI) * CAR_LENGTH * 0.22, y: Math.sin(agent.heading + Math.PI) * CAR_LENGTH * 0.22 };
   const half = CAR_WIDTH * 0.55;

@@ -16,6 +16,7 @@ const view = {
   showWalls: true,
   showCenterline: true,
   showSensors: true,
+  showFps: false,
 };
 
 let mode = 'editor';
@@ -87,14 +88,22 @@ brushSlider.addEventListener('input', () => {
   editor.setBrushSize(v);
 });
 
-const bind = (id, key) => {
+const bind = (id, key, onChange = null) => {
   const el = document.getElementById(id);
-  el.addEventListener('change', () => { view[key] = el.checked; requestRedraw(); });
+  if (!el) return;
+  el.addEventListener('change', () => { 
+    view[key] = el.checked; 
+    if (onChange) onChange(el.checked);
+    requestRedraw(); 
+  });
 };
 bind('show-track', 'showTrack');
 bind('show-walls', 'showWalls');
 bind('show-centerline', 'showCenterline');
 bind('show-sensors', 'showSensors');
+bind('show-fps', 'showFps', (checked) => {
+  document.getElementById('stats-overlay')?.classList.toggle('visible', checked);
+});
 
 document.getElementById('clear-track').addEventListener('click', () => {
   simulation.stop();
@@ -131,9 +140,22 @@ document.getElementById('car-prev')?.addEventListener('click', () => selectCar(-
 document.getElementById('car-next')?.addEventListener('click', () => selectCar(1));
 
 // --- render loop ---
+let fpsCount = 0;
+let fpsLastTime = performance.now();
+let currentFps = 0;
+
 function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000);
   lastT = t;
+
+  fpsCount++;
+  if (t - fpsLastTime >= 1000) {
+    currentFps = Math.round((fpsCount * 1000) / (t - fpsLastTime));
+    fpsCount = 0;
+    fpsLastTime = t;
+  }
+
+  const simStart = performance.now();
   if (simulation.running) {
     const scale = simulation.timeScale;
     for (let i = 0; i < scale; i++) {
@@ -144,11 +166,26 @@ function frame(t) {
     }
     dirty = true;
   }
+  const simEnd = performance.now();
+
   updateHud(t);
-  if (dirty) {
+
+  const drawStart = performance.now();
+  if (dirty || view.showFps) {
     renderer.draw({ track, editor, view, simulation: mode === 'simulate' ? simulation : null });
     dirty = false;
   }
+  const drawEnd = performance.now();
+
+  if (view.showFps) {
+    const elFps = document.getElementById('stat-fps');
+    const elSim = document.getElementById('stat-sim');
+    const elDraw = document.getElementById('stat-draw');
+    if (elFps) elFps.textContent = currentFps;
+    if (elSim) elSim.textContent = (simEnd - simStart).toFixed(1);
+    if (elDraw) elDraw.textContent = (drawEnd - drawStart).toFixed(1);
+  }
+
   requestAnimationFrame(frame);
 }
 window.addEventListener('resize', requestRedraw);

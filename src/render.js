@@ -273,6 +273,8 @@ export class TrackRenderer {
         drawSimulation(ctx, simulation, view, elev);
       }
 
+      if (simulation) drawSimulationOverlays(ctx, simulation, view);
+
       return;
     }
 
@@ -327,6 +329,8 @@ export class TrackRenderer {
       drawBridgeDeckOverlays(ctx, bridges, view);
       if (simulation) drawSimulation(ctx, simulation, view, elev);
     }
+
+    if (simulation) drawSimulationOverlays(ctx, simulation, view);
 
     // --- start / finish gates ---
     if (view.showTrack ?? true) {
@@ -985,14 +989,6 @@ function drawGateLine(ctx, p, normal, width) {
 function drawSimulation(ctx, simulation, view, targetElevation = 0) {
   if (targetElevation === 0) drawSkidMarks(ctx, simulation.skidMarks);
 
-  const leaderElevation = simulation.leader
-    ? simulation.leader.renderElevation ?? simulation.leader.elevation
-    : null;
-
-  if (view.showSensors && simulation.leader?.alive && leaderElevation === targetElevation) {
-    drawSensors(ctx, simulation.leader);
-  }
-
   for (const agent of simulation.agents) {
     if (!agent.alive && !agent.crashed) continue;
     const renderElevation = agent.renderElevation ?? agent.elevation;
@@ -1002,10 +998,16 @@ function drawSimulation(ctx, simulation, view, targetElevation = 0) {
     drawCar(ctx, agent, 0.25);
     ctx.globalAlpha = 1;
   }
+}
 
-  if (simulation.leader?.alive && leaderElevation === targetElevation) {
-    drawLeaderTag(ctx, simulation.leader);
+function drawSimulationOverlays(ctx, simulation, view) {
+  if (!simulation.leader?.alive) return;
+  
+  if (view.showSensors) {
+    drawSensors(ctx, simulation.leader);
   }
+  
+  drawLeaderTag(ctx, simulation.leader);
 }
 
 function drawSkidMarks(ctx, skids) {

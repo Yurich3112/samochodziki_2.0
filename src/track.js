@@ -320,6 +320,16 @@ function propLayer(type) {
 
 function addTyreStack(props, strokes, x, y, scale) {
   if (!isPropSpotClear(strokes, x, y, 12, 0.5)) return false;
+
+  const minTyreDistSq = 196; // 14^2
+  for (const p of props) {
+    if (p.type === 'tyre_stack_1') {
+      const dx = p.x - x;
+      const dy = p.y - y;
+      if (dx * dx + dy * dy < minTyreDistSq) return false;
+    }
+  }
+
   props.push({ type: 'tyre_stack_1', x, y, scale });
   return true;
 }

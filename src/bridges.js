@@ -11,19 +11,13 @@ export function bridgeZoneSpan(stroke, bridge) {
   return bridgeSpanFor(stroke.width, bridge.otherWidth ?? stroke.width, bridge.angleSin) + stroke.width * 0.85;
 }
 
-// Hot-path optimisation: cache computed spans so the same bridge+stroke pair
-// doesn't recompute trigonometry hundreds of times per frame.
-const _spanCache = new WeakMap();  // stroke → Map<bridge, span>
-
+// Hot-path optimisation: cache computed spans directly on the bridge object.
 function cachedBridgeZoneSpan(stroke, bridge) {
-  let map = _spanCache.get(stroke);
-  if (!map) { map = new Map(); _spanCache.set(stroke, map); }
-  let v = map.get(bridge);
-  if (v === undefined) { v = bridgeZoneSpan(stroke, bridge); map.set(bridge, v); }
-  return v;
+  if (bridge._cachedSpan === undefined) {
+    bridge._cachedSpan = bridgeZoneSpan(stroke, bridge);
+  }
+  return bridge._cachedSpan;
 }
-
-const bridgeLevelCache = new WeakMap();
 
 export function bridgeElevation(stroke, s) {
   return surfaceLevelAt(stroke, s, resolvedBridgeLevels(stroke));
@@ -44,14 +38,22 @@ export function bridgeStateAt(stroke, s) {
     const bridge = bridges[i];
     if (!bridge.self || bridge.lowerS == null) continue;
     const span = cachedBridgeZoneSpan(stroke, bridge);
-    if (isUpperBridgeZone(stroke, bridge, s, span)) {
-      const bridgeElevation = levels.get(bridge) ?? elevation;
-      if (!upperState || bridgeElevation > upperState.elevation) {
-        upperState = { layer: 'upper', bridge, span, index: i, elevation: bridgeElevation };
+    const upperDist = arcDistance(stroke, s, bridge.s);
+    let lowerDist = -1;
+    
+    if (upperDist <= span) {
+      lowerDist = arcDistance(stroke, s, bridge.lowerS);
+      if (upperDist <= lowerDist) {
+        const bridgeElevation = levels.get(bridge) ?? elevation;
+        if (!upperState || bridgeElevation > upperState.elevation) {
+          upperState = { layer: 'upper', bridge, span, index: i, elevation: bridgeElevation };
+        }
+        continue;
       }
-      continue;
     }
-    if (isLowerBridgeZone(stroke, bridge, s, span)) {
+    
+    if (lowerDist === -1) lowerDist = arcDistance(stroke, s, bridge.lowerS);
+    if (lowerDist <= span && lowerDist < upperDist) {
       if (!lowerState || elevation > lowerState.elevation) {
         lowerState = { layer: 'lower', bridge, span, index: i, elevation };
       }
@@ -102,7 +104,7 @@ function bridgeUnderCount(stroke, bridge) {
 
 function resolvedBridgeLevels(stroke) {
   const bridges = (stroke.bridgesOver ?? []).filter(bridge => bridge.self && bridge.lowerS != null);
-  const cached = bridgeLevelCache.get(stroke);
+  const cached = stroke._bridgeLevelCache;
   if (cached?.bridges === stroke.bridgesOver && cached.count === bridges.length) {
     return cached.levels;
   }
@@ -123,7 +125,7 @@ function resolvedBridgeLevels(stroke) {
     if (!changed) break;
   }
 
-  bridgeLevelCache.set(stroke, { bridges: stroke.bridgesOver, count: bridges.length, levels });
+  stroke._bridgeLevelCache = { bridges: stroke.bridgesOver, count: bridges.length, levels };
   return levels;
 }
 
@@ -161,10 +163,15 @@ function bridgeSupportLevel(stroke, bridge, levels) {
 
 function surfaceLevelAt(stroke, s, levels, ignoreBridge = null, margin = 0) {
   let level = 0;
-  for (const bridge of stroke.bridgesOver ?? []) {
+  const bridges = stroke.bridgesOver ?? [];
+  for (let i = 0; i < bridges.length; i++) {
+    const bridge = bridges[i];
     if (bridge === ignoreBridge || !bridge.self || bridge.lowerS == null) continue;
-    const span = cachedBridgeZoneSpan(stroke, bridge);
-    if (isUpperBridgeZone(stroke, bridge, s, span + margin)) {
+    const span = cachedBridgeZoneSpan(stroke, bridge) + margin;
+    const upperDist = arcDistance(stroke, s, bridge.s);
+    if (upperDist > span) continue;
+    const lowerDist = arcDistance(stroke, s, bridge.lowerS);
+    if (upperDist <= lowerDist) {
       level = Math.max(level, levels.get(bridge) ?? 1);
     }
   }

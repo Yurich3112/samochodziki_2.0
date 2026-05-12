@@ -63,6 +63,7 @@
         <label class="check"><input type="checkbox" id="show-walls" checked /><span>Show walls</span></label>
         <label class="check"><input type="checkbox" id="show-centerline" checked /><span>Show centerline</span></label>
         <label class="check"><input type="checkbox" id="show-sensors" checked /><span>Show sensors (sim)</span></label>
+        <label class="check"><input type="checkbox" id="show-fps" /><span>Show stats/fps</span></label>
       </section>
 
       <section class="section sim-stats">
@@ -104,6 +105,11 @@
     </aside>
 
     <main class="stage">
+      <div id="stats-overlay" class="stats-overlay">
+        <div>FPS: <span id="stat-fps">0</span></div>
+        <div>Sim: <span id="stat-sim">0.0</span> ms</div>
+        <div>Draw: <span id="stat-draw">0.0</span> ms</div>
+      </div>
       <div class="hint-bar">
         <div class="hint">
           <span class="hint-label">Draw the track</span>
