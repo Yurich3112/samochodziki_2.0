@@ -538,28 +538,39 @@ function statusForStage(stage) {
 }
 
 function castSensors(agent, stroke, wallSource, distances, hits) {
-  // wallSource can be a WallGrid (spatial index) or a plain array (fallback).
   const myLevel = agent.elevation;
   const useGrid = wallSource instanceof WallGrid;
   for (let i = 0; i < SENSOR_ANGLES.length; i++) {
     const rel = SENSOR_ANGLES[i];
     const angle = agent.heading + rel;
-    const endX = agent.x + Math.cos(angle) * SENSOR_RANGE;
-    const endY = agent.y + Math.sin(angle) * SENSOR_RANGE;
-    const end = { x: endX, y: endY };
+    const rx = Math.cos(angle) * SENSOR_RANGE;
+    const ry = Math.sin(angle) * SENSOR_RANGE;
+    const endX = agent.x + rx;
+    const endY = agent.y + ry;
+    
     let best = SENSOR_RANGE;
-    let hitPoint = end;
+    let hitPoint = { x: endX, y: endY };
 
     if (useGrid) {
-      // Spatial grid query — only check walls in cells the ray passes through.
       const walls = wallSource.queryRay(agent.x, agent.y, endX, endY);
       for (let w = 0; w < walls.length; w++) {
         const wall = walls[w];
         if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
-        const hit = raySegment(agent, end, wall.a, wall.b);
-        if (hit && hit.dist < best) {
-          best = hit.dist;
-          hitPoint = hit.p;
+        
+        const sx = wall.b.x - wall.a.x;
+        const sy = wall.b.y - wall.a.y;
+        const denom = rx * sy - ry * sx;
+        if (denom === 0) continue;
+        
+        const t = ((wall.a.x - agent.x) * sy - (wall.a.y - agent.y) * sx) / denom;
+        if (t < 0 || t > 1) continue;
+        const u = ((wall.a.x - agent.x) * ry - (wall.a.y - agent.y) * rx) / denom;
+        if (u < 0 || u > 1) continue;
+        
+        const dist = t * SENSOR_RANGE;
+        if (dist < best) {
+          best = dist;
+          hitPoint = { x: agent.x + rx * t, y: agent.y + ry * t };
         }
       }
     } else {
@@ -572,10 +583,21 @@ function castSensors(agent, stroke, wallSource, distances, hits) {
       for (const wall of wallSource) {
         if (wall.elev !== myLevel && arcDistance(stroke, wall.sMid, agent.lastS) > SENSOR_RANGE * 1.5) continue;
         if (!boxesOverlap(rayBox, wall)) continue;
-        const hit = raySegment(agent, end, wall.a, wall.b);
-        if (hit && hit.dist < best) {
-          best = hit.dist;
-          hitPoint = hit.p;
+        
+        const sx = wall.b.x - wall.a.x;
+        const sy = wall.b.y - wall.a.y;
+        const denom = rx * sy - ry * sx;
+        if (denom === 0) continue;
+        
+        const t = ((wall.a.x - agent.x) * sy - (wall.a.y - agent.y) * sx) / denom;
+        if (t < 0 || t > 1) continue;
+        const u = ((wall.a.x - agent.x) * ry - (wall.a.y - agent.y) * rx) / denom;
+        if (u < 0 || u > 1) continue;
+        
+        const dist = t * SENSOR_RANGE;
+        if (dist < best) {
+          best = dist;
+          hitPoint = { x: agent.x + rx * t, y: agent.y + ry * t };
         }
       }
     }
@@ -637,14 +659,14 @@ function nearestCenterline(stroke, x, y, referenceS = null) {
   // Hot path: called 2× per agent per tick. Avoid object allocation in inner loop.
   let bestDist = Infinity, bestScore = Infinity, bestS = 0, bestHeading = 0, bestIndex = 0;
   const continuityWindow = referenceS == null ? Infinity : Math.max(stroke.width * 2.4, 160);
-  const ranges = centerlineSearchRanges(stroke, referenceS, continuityWindow);
+  const numRanges = getCenterlineSearchRanges(stroke, referenceS, continuityWindow);
   const centerPts = stroke.center;
   const lengths = stroke.lengths;
   const closed = stroke.closed;
   const totalLen = stroke.totalLength;
   const hasRef = referenceS != null;
-  for (let r = 0; r < ranges.length; r++) {
-    const rStart = ranges[r][0], rEnd = ranges[r][1];
+  for (let r = 0; r < numRanges; r++) {
+    const rStart = _rangesBuf[r][0], rEnd = _rangesBuf[r][1];
     for (let i = rStart; i <= rEnd; i++) {
       const a = centerPts[i - 1];
       const b = centerPts[i];
@@ -656,7 +678,7 @@ function nearestCenterline(stroke, x, y, referenceS = null) {
       const ex = x - (a.x + dx * t);
       const ey = y - (a.y + dy * t);
       const dist = Math.sqrt(ex * ex + ey * ey);
-      const segLen = Math.sqrt(len2);
+      const segLen = lengths[i] - lengths[i - 1];
       const s = lengths[i - 1] + segLen * t;
       let score = dist;
       if (hasRef) {
@@ -683,20 +705,31 @@ function arcDistanceForSearch(stroke, a, b) {
   return stroke.closed ? Math.min(d, stroke.totalLength - d) : d;
 }
 
-function centerlineSearchRanges(stroke, referenceS, window) {
+const _rangesBuf = [[0, 0], [0, 0], [0, 0]];
+
+function getCenterlineSearchRanges(stroke, referenceS, window) {
   const maxSeg = stroke.center.length - 1;
-  if (referenceS == null || !Number.isFinite(window)) return [[1, maxSeg]];
+  if (referenceS == null || !Number.isFinite(window)) {
+    _rangesBuf[0][0] = 1; _rangesBuf[0][1] = maxSeg;
+    return 1;
+  }
 
   const total = stroke.totalLength;
-  const ranges = [];
+  const lengths = stroke.lengths;
+  let count = 0;
+  
   const addRange = (a, b) => {
-    const start = Math.max(1, lowerBound(stroke.lengths, Math.max(0, a)) - 1);
-    const end = Math.min(maxSeg, lowerBound(stroke.lengths, Math.min(total, b)) + 1);
-    if (start <= end) ranges.push([start, end]);
+    const start = Math.max(1, lowerBound(lengths, Math.max(0, a)) - 1);
+    const end = Math.min(maxSeg, lowerBound(lengths, Math.min(total, b)) + 1);
+    if (start <= end) {
+      _rangesBuf[count][0] = start;
+      _rangesBuf[count][1] = end;
+      count++;
+    }
   };
 
-  let lo = referenceS - window;
-  let hi = referenceS + window;
+  const lo = referenceS - window;
+  const hi = referenceS + window;
   if (stroke.closed) {
     if (lo < 0) {
       addRange(total + lo, total);
@@ -710,7 +743,12 @@ function centerlineSearchRanges(stroke, referenceS, window) {
   } else {
     addRange(lo, hi);
   }
-  return ranges.length ? ranges : [[1, maxSeg]];
+  
+  if (count === 0) {
+    _rangesBuf[0][0] = 1; _rangesBuf[0][1] = maxSeg;
+    return 1;
+  }
+  return count;
 }
 
 function lowerBound(values, target) {
@@ -753,19 +791,29 @@ function boxesOverlap(a, b) {
 }
 
 function raySegment(a, b, c, d) {
-  const r = { x: b.x - a.x, y: b.y - a.y };
-  const s = { x: d.x - c.x, y: d.y - c.y };
-  const denom = r.x * s.y - r.y * s.x;
-  if (Math.abs(denom) < 1e-9) return null;
-  const t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / denom;
-  const u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / denom;
+  const rx = b.x - a.x;
+  const ry = b.y - a.y;
+  const sx = d.x - c.x;
+  const sy = d.y - c.y;
+  const denom = rx * sy - ry * sx;
+  if (denom === 0) return null;
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / denom;
+  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / denom;
   if (t < 0 || t > 1 || u < 0 || u > 1) return null;
-  const p = { x: a.x + r.x * t, y: a.y + r.y * t };
+  const p = { x: a.x + rx * t, y: a.y + ry * t };
   return { p, dist: Math.hypot(p.x - a.x, p.y - a.y) };
 }
 
 function segmentsIntersect(a, b, c, d) {
-  return !!raySegment(a, b, c, d);
+  const rx = b.x - a.x;
+  const ry = b.y - a.y;
+  const sx = d.x - c.x;
+  const sy = d.y - c.y;
+  const denom = rx * sy - ry * sx;
+  if (denom === 0) return false;
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / denom;
+  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / denom;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 
 function addSkid(agent, skidMarks, drift) {
@@ -890,7 +938,7 @@ class WallGrid {
 
     // Reuse a shared buffer to avoid allocating a new array every call.
     const result = this._queryBuf;
-    result.length = 0;
+    let idx = 0;
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         const bucket = this.cells[r * this.cols + c];
@@ -899,10 +947,11 @@ class WallGrid {
           const w = bucket[i];
           if (w._gs === stamp) continue; // already added
           w._gs = stamp;
-          result.push(w);
+          result[idx++] = w;
         }
       }
     }
+    result.length = idx;
     return result;
   }
 }
