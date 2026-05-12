@@ -55,8 +55,6 @@ export class Simulation {
         this.carSelectionLocked = false;
       }
       this.trackStroke = selected;
-      this.wallSegments = buildWallSegments(this.trackStroke);
-      this.wallCache = new WallGrid(this.wallSegments);
       this.spawnGeneration();
     }
     if (!this.running) this.status = 'READY';
@@ -114,8 +112,12 @@ export class Simulation {
   spawnGeneration() {
     if (!this.trackStroke) this.trackStroke = selectTrackStroke(this.track);
     if (!this.trackStroke) return;
-    this.wallSegments = buildWallSegments(this.trackStroke);
-    this.wallCache = new WallGrid(this.wallSegments);
+    
+    if (!this.wallSegments || this._lastWallStroke !== this.trackStroke) {
+      this.wallSegments = buildWallSegments(this.trackStroke);
+      this.wallCache = new WallGrid(this.wallSegments);
+      this._lastWallStroke = this.trackStroke;
+    }
     this.generationTime = 0;
     this.progressBenchmark = bestHistoricalDistance(this.generationHistory);
     this.skidMarks = this.skidMarks.slice(-250);
