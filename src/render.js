@@ -243,7 +243,7 @@ export class TrackRenderer {
     return this._trackCache;
   }
 
-  draw({ track, editor, view, simulation = null }) {
+  draw({ track, editor, view, simulation = null, stats = null }) {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
@@ -274,6 +274,8 @@ export class TrackRenderer {
       }
 
       if (simulation) drawSimulationOverlays(ctx, simulation, view);
+
+      if (view.showFps && stats) drawFpsStats(ctx, stats);
 
       return;
     }
@@ -364,7 +366,27 @@ export class TrackRenderer {
     if (editor.strokeCommitted && editor.enabled && !editor.drawing) {
       drawStrokeLockedHint(ctx, w, h);
     }
+
+    if (view.showFps && stats) drawFpsStats(ctx, stats);
   }
+}
+
+function drawFpsStats(ctx, stats) {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform for screen-space text
+  ctx.font = '700 12px Inter, Segoe UI, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+
+  ctx.fillText(`FPS: ${stats.fps}`, 16, 16);
+  ctx.fillText(`Sim: ${stats.sim.toFixed(1)} ms`, 16, 32);
+  ctx.fillText(`Draw: ${stats.draw.toFixed(1)} ms`, 16, 48);
+  ctx.restore();
 }
 
 function drawRockProp(ctx, p) {

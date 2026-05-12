@@ -101,9 +101,7 @@ bind('show-track', 'showTrack');
 bind('show-walls', 'showWalls');
 bind('show-centerline', 'showCenterline');
 bind('show-sensors', 'showSensors');
-bind('show-fps', 'showFps', (checked) => {
-  document.getElementById('stats-overlay')?.classList.toggle('visible', checked);
-});
+bind('show-fps', 'showFps');
 
 document.getElementById('clear-track').addEventListener('click', () => {
   simulation.stop();
@@ -143,6 +141,8 @@ document.getElementById('car-next')?.addEventListener('click', () => selectCar(1
 let fpsCount = 0;
 let fpsLastTime = performance.now();
 let currentFps = 0;
+let lastSimTime = 0;
+let lastDrawTime = 0;
 
 function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000);
@@ -167,23 +167,24 @@ function frame(t) {
     dirty = true;
   }
   const simEnd = performance.now();
+  lastSimTime = simEnd - simStart;
 
   updateHud(t);
 
   const drawStart = performance.now();
   if (dirty || view.showFps) {
-    renderer.draw({ track, editor, view, simulation: mode === 'simulate' ? simulation : null });
+    renderer.draw({ 
+      track, 
+      editor, 
+      view, 
+      simulation: mode === 'simulate' ? simulation : null,
+      stats: { fps: currentFps, sim: lastSimTime, draw: lastDrawTime }
+    });
     dirty = false;
   }
   const drawEnd = performance.now();
-
-  if (view.showFps) {
-    const elFps = document.getElementById('stat-fps');
-    const elSim = document.getElementById('stat-sim');
-    const elDraw = document.getElementById('stat-draw');
-    if (elFps) elFps.textContent = currentFps;
-    if (elSim) elSim.textContent = (simEnd - simStart).toFixed(1);
-    if (elDraw) elDraw.textContent = (drawEnd - drawStart).toFixed(1);
+  if (dirty || view.showFps) {
+    lastDrawTime = drawEnd - drawStart;
   }
 
   requestAnimationFrame(frame);
