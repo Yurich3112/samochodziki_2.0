@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  samochodziki:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: samochodziki-app
+    ports:
+      - "5173:80"
+    restart: unless-stopped
