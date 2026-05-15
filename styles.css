@@ -72,6 +72,9 @@ button { font-family: inherit; }
   max-width: 100%;
   height: auto;
   display: block;
+  padding: 8px;
+  background: #fff;
+  border-radius: 12px;
 }
 .brand-game {
   display: flex;
@@ -149,6 +152,44 @@ button { font-family: inherit; }
   text-transform: uppercase;
 }
 .section.spacer { flex: 1; }
+.section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+.section-toggle::-webkit-details-marker {
+  display: none;
+}
+.section-toggle::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform .12s;
+}
+.section-toggle:hover {
+  color: var(--text-dim);
+}
+.collapsible-section[open] .section-toggle {
+  margin-bottom: 10px;
+}
+.collapsible-section[open] .section-toggle::after {
+  transform: rotate(225deg);
+}
+.collapsible-content {
+  display: grid;
+  gap: 1px;
+}
 
 /* ------------- tools ------------- */
 .tool-stack {
@@ -194,44 +235,6 @@ button { font-family: inherit; }
   display: inline-grid;
   place-items: center;
   font-size: 13px;
-}
-
-/* ------------- slider ------------- */
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.slider-row input[type=range] {
-  flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  background: var(--panel-2);
-  border-radius: 2px;
-}
-.slider-row input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px; height: 14px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-  box-shadow: 0 0 0 2px var(--panel);
-}
-.slider-row input[type=range]::-moz-range-thumb {
-  width: 14px; height: 14px;
-  border: none;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-}
-.slider-value {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-dim);
-  font-size: 12px;
-  min-width: 56px;
-  text-align: right;
 }
 
 /* ------------- checks ------------- */
@@ -555,16 +558,6 @@ button { font-family: inherit; }
 
   .section {
     padding: 10px 10px 2px;
-  }
-
-  .slider-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-  }
-
-  .slider-value {
-    text-align: left;
   }
 
   .hint-bar {

@@ -10,7 +10,7 @@
   <div class="app">
     <aside class="panel panel-left">
       <header class="brand">
-        <img class="brand-logo" src="./public/Logos/TeamBit_Logo.png" alt="TeamBit logo" />
+        <img class="brand-logo" src="./public/Logos/team_bit_logo_new.jpg" alt="TeamBit logo" />
         <div class="brand-game">
           <div class="brand-mark">SC</div>
           <div class="brand-text">
@@ -49,22 +49,16 @@
         </div>
       </section>
 
-      <section class="section">
-        <h3 class="section-title">Brush size</h3>
-        <div class="slider-row">
-          <input id="brush-size" type="range" min="50" max="160" value="90" step="2" />
-          <span class="slider-value"><span id="brush-size-value">90</span> px</span>
+      <details class="section collapsible-section">
+        <summary class="section-toggle">View</summary>
+        <div class="collapsible-content">
+          <label class="check"><input type="checkbox" id="show-track" checked /><span>Show track</span></label>
+          <label class="check"><input type="checkbox" id="show-walls" checked /><span>Show walls</span></label>
+          <label class="check"><input type="checkbox" id="show-centerline" checked /><span>Show centerline</span></label>
+          <label class="check"><input type="checkbox" id="show-sensors" checked /><span>Show sensors (sim)</span></label>
+          <label class="check"><input type="checkbox" id="show-fps" /><span>Show stats/fps</span></label>
         </div>
-      </section>
-
-      <section class="section">
-        <h3 class="section-title">View</h3>
-        <label class="check"><input type="checkbox" id="show-track" checked /><span>Show track</span></label>
-        <label class="check"><input type="checkbox" id="show-walls" checked /><span>Show walls</span></label>
-        <label class="check"><input type="checkbox" id="show-centerline" checked /><span>Show centerline</span></label>
-        <label class="check"><input type="checkbox" id="show-sensors" checked /><span>Show sensors (sim)</span></label>
-        <label class="check"><input type="checkbox" id="show-fps" /><span>Show stats/fps</span></label>
-      </section>
+      </details>
 
       <section class="section sim-stats">
         <h3 class="section-title">Generation</h3>

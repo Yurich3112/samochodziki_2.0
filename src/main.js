@@ -80,14 +80,6 @@ document.getElementById('random-track').addEventListener('click', () => {
   requestRedraw();
 });
 
-const brushSlider = document.getElementById('brush-size');
-const brushValue  = document.getElementById('brush-size-value');
-brushSlider.addEventListener('input', () => {
-  const v = parseInt(brushSlider.value, 10);
-  brushValue.textContent = v;
-  editor.setBrushSize(v);
-});
-
 const bind = (id, key, onChange = null) => {
   const el = document.getElementById(id);
   if (!el) return;
